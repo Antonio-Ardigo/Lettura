@@ -18,6 +18,8 @@ from __future__ import annotations
 import io
 import os
 import shutil
+import tempfile
+import threading
 import urllib.request
 from functools import lru_cache
 from pathlib import Path
@@ -44,23 +46,76 @@ def _model_dir() -> Path:
     return Path(os.environ.get("LETTURA_MODEL_DIR", default))
 
 
+# Serialise weight downloads so the background warm-up and a concurrent first
+# request never download the same file at once.
+_weights_lock = threading.Lock()
+
+
 def _download(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(dest.suffix + ".part")
-    with urllib.request.urlopen(url) as response, open(tmp, "wb") as out:  # noqa: S310
-        shutil.copyfileobj(response, out)
-    tmp.replace(dest)
+    # Download to a unique temp file in the same directory, then atomically
+    # rename — so even concurrent downloads can't corrupt a shared .part file.
+    fd, tmp_name = tempfile.mkstemp(dir=dest.parent, suffix=".part")
+    tmp = Path(tmp_name)
+    try:
+        with urllib.request.urlopen(url) as response, os.fdopen(fd, "wb") as out:  # noqa: S310
+            shutil.copyfileobj(response, out)
+        tmp.replace(dest)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _ensure_weights() -> tuple[Path, Path]:
     directory = _model_dir()
     model = Path(os.environ.get("LETTURA_KOKORO_MODEL", directory / _MODEL_FILE))
     voices = Path(os.environ.get("LETTURA_KOKORO_VOICES", directory / _VOICES_FILE))
-    if not model.exists():
-        _download(f"{_RELEASE}/{_MODEL_FILE}", model)
-    if not voices.exists():
-        _download(f"{_RELEASE}/{_VOICES_FILE}", voices)
+    with _weights_lock:
+        if not model.exists():
+            _download(f"{_RELEASE}/{_MODEL_FILE}", model)
+        if not voices.exists():
+            _download(f"{_RELEASE}/{_VOICES_FILE}", voices)
     return model, voices
+
+
+# Warm-up state, surfaced via /api/health so the UI can show "modello in
+# preparazione…" instead of an opaque wait on the first synthesis.
+_MODEL_STATE = "cold"  # "cold" | "warming" | "failed"  (-> "ready" via is_ready)
+_state_lock = threading.Lock()
+
+
+def is_ready() -> bool:
+    """True once the Kokoro session is built (weights downloaded + loaded)."""
+    return _kokoro.cache_info().currsize > 0
+
+
+def model_state() -> str:
+    """Coarse model status for /api/health: cold | warming | ready | failed."""
+    if is_ready():
+        return "ready"
+    return _MODEL_STATE
+
+
+def prefetch() -> None:
+    """Build the Kokoro session in the background. Idempotent; never raises.
+
+    Called from a daemon thread at app startup so the first real request isn't
+    paying the ~90 MB download + session-build cost. If deps are missing or the
+    machine is offline on a truly first run, state becomes "failed" and normal
+    synthesis still surfaces a clear 503 later.
+    """
+    global _MODEL_STATE
+    with _state_lock:
+        if _MODEL_STATE == "warming" or is_ready():
+            return
+        _MODEL_STATE = "warming"
+    new_state = "failed"
+    try:
+        _kokoro()
+        new_state = "ready"
+    except Exception:  # noqa: BLE001 - warm-up is best-effort
+        new_state = "failed"
+    with _state_lock:
+        _MODEL_STATE = new_state
 
 
 @lru_cache(maxsize=1)

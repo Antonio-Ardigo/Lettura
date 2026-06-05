@@ -1,26 +1,41 @@
 """Lettura web app — FastAPI backend.
 
 Endpoints
-  GET  /            -> the single-page frontend
-  GET  /api/health  -> liveness + which optional features are available
-  GET  /api/voices  -> the Italian voices Kokoro can use
-  POST /api/extract -> multipart PDF upload, returns cleaned Italian text
-  POST /api/speak   -> JSON {text, voice, speed}, returns a WAV audio stream
+  GET  /                       -> the single-page frontend
+  GET  /api/health             -> liveness + which optional features are ready
+  GET  /api/voices             -> the Italian voices Kokoro can use
+  POST /api/extract            -> multipart PDF upload; fast text-layer extract
+                                  (returns a doc_id; scanned pages are OCR'd later)
+  POST /api/ocr_page           -> JSON {doc_id, page}: OCR one page on demand
+  POST /api/layout             -> multipart PDF -> per-sentence bounding boxes
+  POST /api/speak              -> JSON {text, voice, speed} -> WAV audio
+  POST /api/speak_aligned      -> JSON -> base64 WAV + per-word [start,end] times
+  POST /api/export             -> JSON -> whole-document audio (blocking; CLI/back-compat)
+  POST /api/export_job         -> JSON -> {job_id}; streams progress, then a file
+  GET  /api/export_job/{id}/events  -> Server-Sent Events progress stream
+  GET  /api/export_job/{id}/result  -> the finished audio file
 
-Everything runs locally: pdfplumber for extraction, Kokoro for TTS. No data
-leaves the machine and there are no API keys.
+Everything runs locally: pdfplumber (+ Tesseract for scanned pages) for
+extraction, Kokoro for TTS. No data leaves the machine and there are no API
+keys. OCR happens lazily — one page at a time, as the reader reaches it — so
+extraction returns quickly even for large scanned documents.
 """
 from __future__ import annotations
 
 import base64
+import json
+import os
+import queue
+import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import __version__, align, export, layout, pdf_extract, segment, tts
+from . import __version__, align, export, layout, pdf_extract, segment, store, tts
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB
@@ -28,7 +43,20 @@ MAX_TTS_CHARS = 20_000  # guardrail per /api/speak request
 MAX_EXPORT_CHARS = 500_000  # ~ several hours of audio per /api/export request
 _EXPORT_MEDIA = {"wav": "audio/wav", "mp3": "audio/mpeg", "m4b": "audio/mp4"}
 
-app = FastAPI(title="Lettura", version=__version__)
+_DOC_STORE = store.DocStore()
+_JOB_STORE = store.JobStore()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Warm the TTS model in the background so the first synthesis isn't paying
+    # the ~90 MB download + session-build cost. Disabled in tests/CI via env.
+    if not os.environ.get("LETTURA_NO_WARMUP"):
+        threading.Thread(target=tts.prefetch, name="kokoro-warmup", daemon=True).start()
+    yield
+
+
+app = FastAPI(title="Lettura", version=__version__, lifespan=lifespan)
 
 
 class SpeakRequest(BaseModel):
@@ -44,12 +72,31 @@ class ExportRequest(BaseModel):
     format: str = "wav"
 
 
+class OcrPageRequest(BaseModel):
+    doc_id: str
+    page: int = Field(ge=1)
+
+
+async def _read_pdf_upload(file: UploadFile) -> bytes:
+    """Validate a PDF upload and return its bytes (shared by extract/layout)."""
+    if (file.content_type or "").lower() not in {"application/pdf", "application/x-pdf"}:
+        raise HTTPException(status_code=415, detail="Please upload a PDF file.")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="The uploaded PDF is empty.")
+    if len(data) > MAX_PDF_BYTES:
+        raise HTTPException(status_code=413, detail="PDF exceeds the 50 MB limit.")
+    return data
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {
         "status": "ok",
         "version": __version__,
         "ocr_available": pdf_extract._OCR_AVAILABLE,
+        "model_state": tts.model_state(),
+        "model_ready": tts.is_ready(),
         "voices": tts.ITALIAN_VOICES,
     }
 
@@ -61,38 +108,68 @@ def voices() -> dict:
 
 @app.post("/api/extract")
 async def extract(file: UploadFile = File(...)) -> dict:
-    if (file.content_type or "").lower() not in {"application/pdf", "application/x-pdf"}:
-        raise HTTPException(status_code=415, detail="Please upload a PDF file.")
-    data = await file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="The uploaded PDF is empty.")
-    if len(data) > MAX_PDF_BYTES:
-        raise HTTPException(status_code=413, detail="PDF exceeds the 50 MB limit.")
+    """Fast extraction: text-layer pages now, scanned pages OCR'd later.
+
+    Returns a ``doc_id`` the browser uses to OCR scanned pages one at a time
+    (see /api/ocr_page) and to drive read-along without re-uploading the PDF.
+    """
+    data = await _read_pdf_upload(file)
     try:
-        result = pdf_extract.extract_pdf(data)
+        quick = pdf_extract.extract_quick(data)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=f"Could not read PDF: {exc}") from exc
+    doc_id = _DOC_STORE.put(data)
+    text = quick.text
     return {
-        "text": result.text,
-        "sentences": segment.segment_sentences(result.text),
-        "page_count": result.page_count,
-        "ocr_used": result.ocr_used,
-        "ocr_pages": result.ocr_pages,
-        "ocr_error": result.ocr_error,
-        "char_count": len(result.text),
+        "doc_id": doc_id,
+        "text": text,
+        "sentences": segment.segment_sentences(text),
+        "page_count": quick.page_count,
+        "pages": [
+            {
+                "page": p.page,
+                "status": p.status,
+                "sentences": segment.segment_sentences(p.text) if p.text else [],
+            }
+            for p in quick.pages
+        ],
+        "pending_ocr_pages": [p.page for p in quick.pages if p.status == "needs_ocr"],
+        "ocr_available": quick.ocr_available,
+        "ocr_error": quick.ocr_error,
+        "ocr_used": False,
+        "ocr_pages": [],
+        "char_count": len(text),
+    }
+
+
+@app.post("/api/ocr_page")
+def ocr_page(req: OcrPageRequest) -> dict:
+    """OCR a single page on demand, using the PDF cached under ``doc_id``."""
+    data = _DOC_STORE.get(req.doc_id)
+    if data is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Documento non più disponibile; ricaricalo.",
+        )
+    if not pdf_extract._OCR_AVAILABLE:
+        return {"page": req.page, "status": "ocr_failed", "text": "", "sentences": []}
+    try:
+        text = pdf_extract.ocr_page_text(data, req.page)
+    except Exception:  # noqa: BLE001 - OCR is best-effort, degrade per page
+        return {"page": req.page, "status": "ocr_failed", "text": "", "sentences": []}
+    status = "ready" if text.strip() else "empty"
+    return {
+        "page": req.page,
+        "status": status,
+        "text": text,
+        "sentences": segment.segment_sentences(text),
     }
 
 
 @app.post("/api/layout")
 async def pdf_layout(file: UploadFile = File(...)) -> dict:
     """Per-sentence bounding boxes for highlighting on the rendered PDF."""
-    if (file.content_type or "").lower() not in {"application/pdf", "application/x-pdf"}:
-        raise HTTPException(status_code=415, detail="Please upload a PDF file.")
-    data = await file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="The uploaded PDF is empty.")
-    if len(data) > MAX_PDF_BYTES:
-        raise HTTPException(status_code=413, detail="PDF exceeds the 50 MB limit.")
+    data = await _read_pdf_upload(file)
     try:
         return layout.extract_layout(data)
     except Exception as exc:  # noqa: BLE001
@@ -140,13 +217,16 @@ def speak_aligned(req: SpeakRequest) -> dict:
     }
 
 
-@app.post("/api/export")
-def export_audio(req: ExportRequest) -> Response:
-    """Synthesize a whole document into one downloadable audio file.
+def _export_bytes(req: ExportRequest, fmt: str, progress=None) -> tuple[bytes, str]:
+    """Synthesize + encode a whole document. Returns (data, media_type)."""
+    audio, sample_rate = export.synthesize_long(
+        req.text, voice=req.voice, speed=req.speed, progress=progress
+    )
+    data = export.encode(audio, sample_rate, fmt=fmt)
+    return data, _EXPORT_MEDIA[fmt]
 
-    This is a batch job: long documents take a while (minutes for ~1 hour of
-    audio on CPU). WAV needs no extra tools; MP3/M4B require ffmpeg.
-    """
+
+def _validate_export(req: ExportRequest) -> str:
     fmt = req.format.lower()
     if fmt not in _EXPORT_MEDIA:
         raise HTTPException(status_code=400, detail="format must be wav, mp3, or m4b.")
@@ -155,19 +235,99 @@ def export_audio(req: ExportRequest) -> Response:
             status_code=413,
             detail=f"Text exceeds {MAX_EXPORT_CHARS} characters.",
         )
+    return fmt
+
+
+@app.post("/api/export")
+def export_audio(req: ExportRequest) -> Response:
+    """Synthesize a whole document into one downloadable audio file (blocking).
+
+    Kept for the CLI and back-compat; the frontend uses /api/export_job so it
+    can show a progress bar. WAV needs no extra tools; MP3/M4B require ffmpeg.
+    """
+    fmt = _validate_export(req)
     try:
-        audio, sample_rate = export.synthesize_long(
-            req.text, voice=req.voice, speed=req.speed
-        )
-        data = export.encode(audio, sample_rate, fmt=fmt)
+        data, media_type = _export_bytes(req, fmt)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:  # Kokoro / ffmpeg missing
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return Response(
         content=data,
-        media_type=_EXPORT_MEDIA[fmt],
+        media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="lettura.{fmt}"'},
+    )
+
+
+@app.post("/api/export_job")
+def export_job_start(req: ExportRequest) -> dict:
+    """Start a background export. Poll progress via .../events, fetch .../result."""
+    fmt = _validate_export(req)
+    job_id, job = _JOB_STORE.create()
+
+    def run() -> None:
+        try:
+            def progress(done: int, total: int) -> None:
+                job.events.put({"phase": "synth", "done": done, "total": total})
+
+            job.events.put({"phase": "synth", "done": 0, "total": 1})
+            audio, sample_rate = export.synthesize_long(
+                req.text, voice=req.voice, speed=req.speed, progress=progress
+            )
+            job.events.put({"phase": "encode", "done": 0, "total": 1})
+            job.result = export.encode(audio, sample_rate, fmt=fmt)
+            job.media_type = _EXPORT_MEDIA[fmt]
+            job.filename = f"lettura.{fmt}"
+            job.done = True
+            job.events.put({"phase": "done"})
+        except (ValueError, RuntimeError) as exc:
+            job.error = str(exc)
+            job.events.put({"phase": "error", "detail": str(exc)})
+        except Exception:  # noqa: BLE001
+            job.error = "Esportazione non riuscita."
+            job.events.put({"phase": "error", "detail": job.error})
+
+    threading.Thread(target=run, name=f"export-{job_id}", daemon=True).start()
+    return {"job_id": job_id}
+
+
+@app.get("/api/export_job/{job_id}/events")
+def export_job_events(job_id: str) -> StreamingResponse:
+    job = _JOB_STORE.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Esportazione non trovata.")
+
+    def stream():
+        while True:
+            try:
+                event = job.events.get(timeout=15)
+            except queue.Empty:  # heartbeat to keep the connection open
+                yield ": keep-alive\n\n"
+                continue
+            yield f"data: {json.dumps(event)}\n\n"
+            if event.get("phase") in ("done", "error"):
+                break
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/export_job/{job_id}/result")
+def export_job_result(job_id: str) -> Response:
+    job = _JOB_STORE.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Esportazione non trovata.")
+    if job.error is not None:
+        raise HTTPException(status_code=500, detail=job.error)
+    if not job.done or job.result is None:
+        raise HTTPException(status_code=404, detail="File non ancora pronto.")
+    return Response(
+        content=job.result,
+        media_type=job.media_type or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{job.filename}"'},
     )
 
 
