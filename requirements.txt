@@ -15,8 +15,13 @@ pytesseract>=0.3.10
 pdf2image>=1.17
 Pillow>=10.0
 
-# Text-to-speech: Kokoro (Apache-2.0), Italian voices, runs offline.
+# Text-to-speech: Kokoro via ONNX Runtime (Apache-2.0), Italian voices, offline.
+# Weights are fetched once from GitHub (no Hugging Face, no torch).
 # Needs the system package: espeak-ng.
-kokoro>=0.9.4
+kokoro-onnx>=0.4.9
+onnxruntime>=1.17
 soundfile>=0.12
 numpy>=1.26
+
+# Audio export to MP3 / M4B (bundles a static ffmpeg; WAV export needs nothing).
+imageio-ffmpeg>=0.5

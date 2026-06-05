@@ -22,6 +22,7 @@ env/
 .cache/
 *.onnx
 *.pt
+/models/
 
 # Editor / OS
 .vscode/
