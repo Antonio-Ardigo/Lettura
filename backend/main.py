@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import __version__, pdf_extract, tts
+from . import __version__, pdf_extract, segment, tts
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB
@@ -64,6 +64,7 @@ async def extract(file: UploadFile = File(...)) -> dict:
         raise HTTPException(status_code=422, detail=f"Could not read PDF: {exc}") from exc
     return {
         "text": result.text,
+        "sentences": segment.segment_sentences(result.text),
         "page_count": result.page_count,
         "ocr_used": result.ocr_used,
         "ocr_pages": result.ocr_pages,

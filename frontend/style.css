@@ -65,19 +65,34 @@ button {
 }
 button:hover:not(:disabled) { background: var(--accent-dark); }
 button:disabled { background: #cbb9a6; cursor: not-allowed; }
+button.secondary { background: #e7e0d6; color: var(--fg); }
+button.secondary:hover:not(:disabled) { background: #d9cfc0; }
+button.playing { background: #8a2b2b; }
+button.playing:hover:not(:disabled) { background: #771f1f; }
 
 .meta { color: var(--muted); font-size: 0.9rem; margin-bottom: 0.5rem; }
 
-textarea {
-  width: 100%;
+.reader {
   min-height: 240px;
-  resize: vertical;
+  max-height: 50vh;
+  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 0.75rem;
-  font: inherit;
+  padding: 0.85rem 1rem;
   background: #fffdf9;
   color: var(--fg);
+  line-height: 1.75;
+}
+.sentence {
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 0 1px;
+  transition: background 0.15s;
+}
+.sentence:hover { background: #f1e7d8; }
+.sentence.active {
+  background: #ffe1b3;
+  box-shadow: 0 0 0 2px #ffe1b3;
 }
 
 .controls {

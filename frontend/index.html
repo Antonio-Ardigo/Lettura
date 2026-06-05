@@ -23,8 +23,7 @@
 
     <section class="card" id="resultCard" hidden>
       <div class="meta" id="meta"></div>
-      <textarea id="text" spellcheck="false"
-        placeholder="Il testo estratto apparirà qui…"></textarea>
+      <div id="reader" class="reader"></div>
 
       <div class="controls">
         <label>Voce
@@ -33,7 +32,8 @@
         <label>Velocità <span id="speedval">1.0×</span>
           <input type="range" id="speed" min="0.5" max="2" step="0.1" value="1" />
         </label>
-        <button id="speakBtn">Leggi ad alta voce</button>
+        <button id="readAlongBtn">▶ Leggi con evidenziazione</button>
+        <button id="speakBtn" class="secondary">Leggi tutto</button>
       </div>
 
       <audio id="player" controls hidden></audio>

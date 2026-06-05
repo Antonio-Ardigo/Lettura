@@ -7,15 +7,22 @@ const fileLabel = $("filelabel");
 const extractBtn = $("extractBtn");
 const resultCard = $("resultCard");
 const meta = $("meta");
-const textArea = $("text");
+const reader = $("reader");
 const voiceSelect = $("voice");
 const speed = $("speed");
 const speedVal = $("speedval");
+const readAlongBtn = $("readAlongBtn");
 const speakBtn = $("speakBtn");
 const player = $("player");
 const statusEl = $("status");
 
 let selectedFile = null;
+let sentences = [];
+let fullText = "";
+let playing = false;
+let currentIndex = 0;
+let currentAudioUrl = null;
+let endedResolver = null;
 
 function setStatus(message, isError = false) {
   statusEl.textContent = message || "";
@@ -54,6 +61,7 @@ function selectFile(file) {
 // --- Extract ---
 extractBtn.addEventListener("click", async () => {
   if (!selectedFile) return;
+  stopReadAlong();
   extractBtn.disabled = true;
   setStatus("Estrazione del testo in corso…");
   try {
@@ -62,10 +70,12 @@ extractBtn.addEventListener("click", async () => {
     const res = await fetch("/api/extract", { method: "POST", body: form });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Estrazione non riuscita.");
-    textArea.value = data.text;
+    fullText = data.text;
+    sentences = data.sentences || [];
+    renderReader();
     meta.textContent =
-      `${data.page_count} pagine · ${data.char_count} caratteri` +
-      (data.ocr_used ? ` · OCR usato sulle pagine ${data.ocr_pages.join(", ")}` : "");
+      `${data.page_count} pagine · ${sentences.length} frasi · ${data.char_count} caratteri` +
+      (data.ocr_used ? ` · OCR sulle pagine ${data.ocr_pages.join(", ")}` : "");
     resultCard.hidden = false;
     setStatus("");
   } catch (err) {
@@ -74,6 +84,34 @@ extractBtn.addEventListener("click", async () => {
     extractBtn.disabled = false;
   }
 });
+
+// --- Reader rendering ---
+function renderReader() {
+  reader.innerHTML = "";
+  currentIndex = 0;
+  sentences.forEach((sentence, i) => {
+    const span = document.createElement("span");
+    span.className = "sentence";
+    span.textContent = sentence + " ";
+    span.dataset.index = String(i);
+    span.addEventListener("click", () => {
+      if (playing) stopReadAlong();
+      startReadAlong(i);
+    });
+    reader.appendChild(span);
+  });
+}
+
+function highlight(i) {
+  reader
+    .querySelectorAll(".sentence.active")
+    .forEach((el) => el.classList.remove("active"));
+  const el = reader.querySelector(`.sentence[data-index="${i}"]`);
+  if (el) {
+    el.classList.add("active");
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+}
 
 // --- Voices + speed ---
 async function loadVoices() {
@@ -89,7 +127,7 @@ async function loadVoices() {
       voiceSelect.appendChild(opt);
     });
   } catch {
-    /* health/voices endpoint unavailable; leave selector empty */
+    /* voices endpoint unavailable; leave selector empty */
   }
 }
 
@@ -97,31 +135,106 @@ speed.addEventListener("input", () => {
   speedVal.textContent = `${Number(speed.value).toFixed(1)}×`;
 });
 
-// --- Speak ---
+// --- Synthesis helpers ---
+async function synth(text) {
+  const res = await fetch("/api/speak", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text,
+      voice: voiceSelect.value || undefined,
+      speed: Number(speed.value),
+    }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || "Sintesi vocale non riuscita.");
+  }
+  return URL.createObjectURL(await res.blob());
+}
+
+function playUrl(url) {
+  return new Promise((resolve) => {
+    endedResolver = resolve;
+    player.src = url;
+    player.hidden = false;
+    player.onended = () => resolve("ended");
+    player.play();
+  });
+}
+
+// --- Read-along (sentence by sentence with highlighting) ---
+async function startReadAlong(from) {
+  if (playing || sentences.length === 0) return;
+  playing = true;
+  setReadAlongUI(true);
+  setStatus("Generazione dell'audio… (la prima volta scarica il modello)");
+  let i = from;
+  for (; playing && i < sentences.length; i++) {
+    currentIndex = i;
+    highlight(i);
+    let url;
+    try {
+      url = await synth(sentences[i]);
+    } catch (err) {
+      setStatus(err.message, true);
+      break;
+    }
+    if (!playing) {
+      URL.revokeObjectURL(url);
+      break;
+    }
+    setStatus("");
+    if (currentAudioUrl) URL.revokeObjectURL(currentAudioUrl);
+    currentAudioUrl = url;
+    await playUrl(url); // resolves on "ended" or when stopped
+  }
+  if (i >= sentences.length) currentIndex = 0; // finished naturally
+  stopReadAlong();
+}
+
+function stopReadAlong() {
+  if (!playing) {
+    setReadAlongUI(false);
+    return;
+  }
+  playing = false;
+  try {
+    player.pause();
+  } catch {
+    /* ignore */
+  }
+  if (endedResolver) {
+    endedResolver("stopped");
+    endedResolver = null;
+  }
+  setReadAlongUI(false);
+}
+
+function setReadAlongUI(on) {
+  readAlongBtn.textContent = on ? "⏹ Ferma" : "▶ Leggi con evidenziazione";
+  readAlongBtn.classList.toggle("playing", on);
+}
+
+readAlongBtn.addEventListener("click", () => {
+  if (playing) stopReadAlong();
+  else startReadAlong(currentIndex);
+});
+
+// --- Read everything in one shot ---
 speakBtn.addEventListener("click", async () => {
-  const text = textArea.value.trim();
-  if (!text) {
+  if (!fullText.trim()) {
     setStatus("Non c'è testo da leggere.", true);
     return;
   }
+  stopReadAlong();
   speakBtn.disabled = true;
-  setStatus("Generazione dell'audio in corso… (la prima volta scarica il modello)");
+  setStatus("Generazione dell'audio… (la prima volta scarica il modello)");
   try {
-    const res = await fetch("/api/speak", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text,
-        voice: voiceSelect.value || undefined,
-        speed: Number(speed.value),
-      }),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.detail || "Sintesi vocale non riuscita.");
-    }
-    const blob = await res.blob();
-    player.src = URL.createObjectURL(blob);
+    const url = await synth(fullText);
+    if (currentAudioUrl) URL.revokeObjectURL(currentAudioUrl);
+    currentAudioUrl = url;
+    player.src = url;
     player.hidden = false;
     player.play();
     setStatus("");

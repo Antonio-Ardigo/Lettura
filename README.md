@@ -86,13 +86,15 @@ pytest -q                      # unit tests
 |---|---|---|
 | `GET` | `/api/health` | Liveness + whether OCR is available |
 | `GET` | `/api/voices` | Available Italian voices |
-| `POST` | `/api/extract` | `multipart` PDF upload → cleaned text JSON |
+| `POST` | `/api/extract` | `multipart` PDF upload → cleaned text + sentences JSON |
 | `POST` | `/api/speak` | JSON `{text, voice, speed}` → WAV audio |
 
 ## Status
 
-Early prototype: single-voice narration. Possible next steps — sentence-synced
-highlighting (read-along), chapter/M4B export, and streaming long documents.
+Prototype: single-voice narration with **sentence-synced read-along
+highlighting** — click any sentence to start reading from there, and the active
+sentence is highlighted and auto-scrolled as it plays. Possible next steps —
+chapter/M4B export and streaming long documents.
 
 ## License
 
