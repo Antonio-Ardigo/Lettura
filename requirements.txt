@@ -18,7 +18,8 @@ Pillow>=10.0
 # Text-to-speech: Kokoro via ONNX Runtime (Apache-2.0), Italian voices, offline.
 # Weights are fetched once from GitHub (no Hugging Face, no torch).
 # Needs the system package: espeak-ng.
-kokoro-onnx>=0.4.9
+# 0.4.7 is the highest kokoro-onnx that still supports Python 3.14.
+kokoro-onnx>=0.4.7
 onnxruntime>=1.17
 soundfile>=0.12
 numpy>=1.26
