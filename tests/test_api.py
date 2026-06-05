@@ -36,6 +36,7 @@ def test_extract_returns_sentences():
     assert isinstance(data["sentences"], list)
     assert len(data["sentences"]) >= 2
     assert "Nel mezzo del cammin" in data["sentences"][0]
+    assert data["ocr_error"] is False  # digital sample never needs OCR
 
 
 def test_speak_without_kokoro_is_graceful():
