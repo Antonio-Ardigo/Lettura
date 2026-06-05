@@ -31,23 +31,31 @@ cache, after which everything runs offline.
 ## Architecture
 
 ```
-PDF ──▶ has text layer?
-          ├─ yes ─▶ pdfplumber extract  ──▶ word boxes (for PDF highlighting)
-          └─ no  ─▶ Tesseract(ita) OCR
-        │
-        ▼
-   text cleanup ─▶ sentence segmentation
-        │
+PDF ──▶ extract_quick (pdfplumber, NO OCR)
+          ├─ text-layer pages ─▶ ready immediately ─▶ sentence segmentation
+          └─ scanned pages     ─▶ marked "needs_ocr" (held by doc_id)
+        │                              │
+        │                              ▼  (lazily, as the reader reaches a page)
+        │                        Tesseract(ita) OCR ─▶ ocr_clean ─▶ spliced in
         ▼
    Kokoro TTS (ONNX, Italian) ─▶ WAV/MP3/M4B ─▶ browser playback / download
+        │
+        └─ long exports run as a background job streaming progress over SSE
 ```
 
-- `backend/pdf_extract.py` — extraction + OCR fallback + cleanup
+Extraction returns **fast**: only the text layer is read up front. Scanned pages
+are OCR'd **one at a time, on demand, while you read** (with a progress bar),
+and the raw OCR output is sanitised (`ocr_clean`) before it is ever spoken or
+exported. The TTS model is **warmed up in the background at startup** so the
+first synthesis isn't blocked on the ~90 MB download.
+
+- `backend/pdf_extract.py` — fast extract (`extract_quick`), on-demand OCR (`ocr_page_text`), OCR sanitisation (`ocr_clean`) + cleanup
+- `backend/store.py` — small in-memory TTL caches: uploaded PDFs (`doc_id`) and export jobs (`job_id`)
 - `backend/segment.py` — Italian sentence segmentation
 - `backend/layout.py` — per-sentence bounding boxes on the page (`/api/layout`)
-- `backend/tts.py` — Kokoro ONNX Italian TTS (download-once, then offline)
+- `backend/tts.py` — Kokoro ONNX Italian TTS (background warm-up; download-once, then offline)
 - `backend/export.py` — chunk → synthesize → concatenate to WAV/MP3/M4B (+ CLI)
-- `backend/main.py` — FastAPI routes + serves the frontend
+- `backend/main.py` — FastAPI routes (lazy OCR + SSE export progress) + serves the frontend
 - `frontend/` — vanilla HTML/CSS/JS UI; `frontend/vendor/pdfjs/` is vendored PDF.js
 
 ## Run it locally
@@ -122,12 +130,14 @@ pytest -q                      # unit tests
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/health` | Liveness + whether OCR is available |
+| `GET` | `/api/health` | Liveness + whether OCR is available + TTS model readiness |
 | `GET` | `/api/voices` | Available Italian voices |
-| `POST` | `/api/extract` | `multipart` PDF → cleaned text + sentences JSON |
+| `POST` | `/api/extract` | `multipart` PDF → fast text-layer extract + `doc_id` + pages needing OCR |
+| `POST` | `/api/ocr_page` | JSON `{doc_id, page}` → OCR one page on demand (cleaned) |
 | `POST` | `/api/layout` | `multipart` PDF → per-sentence bounding boxes |
 | `POST` | `/api/speak` | JSON `{text, voice, speed}` → WAV audio |
-| `POST` | `/api/export` | JSON `{text, voice, speed, format}` → WAV/MP3/M4B |
+| `POST` | `/api/export` | JSON `{text, voice, speed, format}` → WAV/MP3/M4B (blocking; CLI/back-compat) |
+| `POST` | `/api/export_job` | JSON → `{job_id}`; progress via SSE `…/events`, file via `…/result` |
 
 ## Status
 

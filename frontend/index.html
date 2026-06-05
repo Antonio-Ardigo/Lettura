@@ -13,6 +13,8 @@
       <p class="tagline">Carica un PDF in italiano e ascoltalo letto ad alta voce.</p>
     </header>
 
+    <p class="notice" id="modelNotice" hidden></p>
+
     <section class="card">
       <label for="file" class="filedrop" id="filedrop">
         <input type="file" id="file" accept="application/pdf" hidden />
@@ -51,6 +53,12 @@
       </div>
 
       <audio id="player" controls hidden></audio>
+
+      <div id="progress" class="progress" hidden role="progressbar"
+           aria-valuemin="0" aria-valuemax="100" aria-label="Avanzamento">
+        <div id="progressBar" class="progress-bar"></div>
+        <span id="progressLabel" class="progress-label"></span>
+      </div>
     </section>
 
     <p class="status" id="status" role="status" aria-live="polite"></p>

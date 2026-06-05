@@ -114,6 +114,99 @@ audio { width: 100%; margin-top: 1rem; }
 .status { text-align: center; color: var(--muted); min-height: 1.5em; }
 .status.error { color: #b00020; }
 
+.notice {
+  text-align: center;
+  color: var(--accent-dark);
+  background: #fff7ef;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+}
+
+/* Reusable progress bar (OCR + audio export + model download) */
+.progress {
+  position: relative;
+  margin-top: 1rem;
+  height: 1.4rem;
+  background: var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.progress-bar {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  border-radius: 7px;
+  transition: width 0.2s ease;
+}
+.progress-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  color: var(--fg);
+}
+.progress.indeterminate .progress-bar {
+  width: 35%;
+  animation: progress-slide 1.1s ease-in-out infinite;
+}
+@keyframes progress-slide {
+  0% { margin-left: -35%; }
+  100% { margin-left: 100%; }
+}
+
+/* Pending / failed OCR placeholders in the reader */
+.sentence.pending,
+.sentence.ocr-failed {
+  display: block;
+  cursor: default;
+  font-style: italic;
+  color: var(--muted);
+  border-left: 3px dashed var(--border);
+  padding-left: 0.6rem;
+  margin: 0.4rem 0;
+}
+.sentence.pending { cursor: pointer; }
+.sentence.pending::before {
+  content: "";
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  margin-right: 0.4rem;
+  vertical-align: -0.1em;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.sentence.ocr-failed { border-left-color: #b00020; color: #b00020; }
+
+/* Working/loading state for action buttons */
+button.loading { position: relative; color: transparent !important; }
+button.loading::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 1em;
+  height: 1em;
+  margin: -0.5em 0 0 -0.5em;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .progress.indeterminate .progress-bar { animation: none; width: 100%; opacity: 0.6; }
+  .sentence.pending::before, button.loading::after { animation: none; }
+}
+
 /* View tabs */
 .viewtabs { display: flex; gap: 0.5rem; margin-bottom: 0.6rem; }
 .tab {
