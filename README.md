@@ -99,6 +99,17 @@ python -m backend.export samples/esempio.pdf out.m4b --chapters-per-page
 python -m backend.export book.pdf out.mp3 --voice im_nicola
 ```
 
+## Install on Windows
+
+A one-command installer sets Lettura up under `C:\Program Files\Lettura` with a
+Start-Menu shortcut — see [`install/windows/README.md`](install/windows/README.md).
+In short, from an **Administrator** PowerShell inside a clone of the repo:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\install\windows\Install-Lettura.ps1
+```
+
 ## Develop & test
 
 ```bash
