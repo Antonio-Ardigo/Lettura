@@ -54,6 +54,18 @@ function Invoke-Checked {
     }
 }
 
+function Stop-RunningLettura {
+    # A running server locks files in the install dir; stop it before reinstalling.
+    param([string]$Dir)
+    $procs = Get-Process python, pythonw -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and $_.Path.StartsWith($Dir, [System.StringComparison]::OrdinalIgnoreCase) }
+    foreach ($p in $procs) {
+        Write-Host "Stopping a running Lettura server (PID $($p.Id))..."
+        Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+    }
+    if ($procs) { Start-Sleep -Seconds 1 }
+}
+
 Assert-Admin
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -62,6 +74,9 @@ Write-Host "Installing Lettura"
 Write-Host "  source : $repoRoot"
 Write-Host "  target : $InstallDir"
 Write-Host "  python : $($python.Exe) $($python.Base -join ' ')"
+
+# Stop a previously launched server so its files aren't locked during reinstall.
+Stop-RunningLettura -Dir $InstallDir
 
 # 1. Copy the application into the install directory (skip dev/cache dirs).
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
