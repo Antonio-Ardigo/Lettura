@@ -23,6 +23,24 @@ fi
 
 cd "${CLAUDE_PROJECT_DIR:-.}"
 
+# --- System packages (best-effort) ---
+# Lettura needs espeak-ng (Kokoro's Italian phonemiser) and, for OCR of scanned
+# PDFs, tesseract-ocr + the Italian pack and poppler-utils. Install them when
+# apt is available; skip quietly otherwise so the hook never blocks the session.
+if command -v apt-get >/dev/null 2>&1; then
+  SUDO=""
+  if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then SUDO="sudo"; fi
+  echo "[session-start] Installing system packages (espeak-ng, tesseract, poppler)..."
+  # 'update' may fail in restricted networks; don't let that block a cached install.
+  $SUDO apt-get update -y >/dev/null 2>&1 || true
+  if $SUDO apt-get install -y --no-install-recommends \
+       espeak-ng tesseract-ocr tesseract-ocr-ita poppler-utils >/dev/null 2>&1; then
+    echo "[session-start] System packages ready."
+  else
+    echo "[session-start] Note: system package install skipped/failed (continuing)."
+  fi
+fi
+
 echo "[session-start] Detecting project dependencies..."
 
 ran_something=false

@@ -1,0 +1,97 @@
+:root {
+  --bg: #faf8f4;
+  --fg: #2b2622;
+  --muted: #8a8178;
+  --accent: #b5651d;
+  --accent-dark: #944f15;
+  --card: #ffffff;
+  --border: #e7e0d6;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  line-height: 1.5;
+}
+
+.app {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+}
+
+header { text-align: center; margin-bottom: 1.5rem; }
+h1 { margin: 0; font-size: 2.4rem; letter-spacing: -0.02em; }
+.tagline { color: var(--muted); margin: 0.25rem 0 0; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1.25rem;
+  margin-bottom: 1.25rem;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+.filedrop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 110px;
+  border: 2px dashed var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  padding: 1rem;
+}
+.filedrop.drag { border-color: var(--accent); background: #fff7ef; color: var(--accent-dark); }
+
+button {
+  margin-top: 1rem;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  padding: 0.6rem 1.1rem;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+button:hover:not(:disabled) { background: var(--accent-dark); }
+button:disabled { background: #cbb9a6; cursor: not-allowed; }
+
+.meta { color: var(--muted); font-size: 0.9rem; margin-bottom: 0.5rem; }
+
+textarea {
+  width: 100%;
+  min-height: 240px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  font: inherit;
+  background: #fffdf9;
+  color: var(--fg);
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.controls label { display: flex; flex-direction: column; font-size: 0.85rem; color: var(--muted); gap: 0.25rem; }
+.controls select, .controls input[type="range"] { font: inherit; }
+.controls button { margin-top: 0; margin-left: auto; }
+
+audio { width: 100%; margin-top: 1rem; }
+
+.status { text-align: center; color: var(--muted); min-height: 1.5em; }
+.status.error { color: #b00020; }

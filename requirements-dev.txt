@@ -1,0 +1,6 @@
+# Development / test dependencies (in addition to requirements.txt).
+-r requirements.txt
+
+pytest>=8.0
+reportlab>=4.0   # used to generate sample Italian PDFs for manual testing
+ruff>=0.6        # linter / formatter
