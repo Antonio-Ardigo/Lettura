@@ -26,6 +26,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"  # large Invoke-WebRequest downloads are far faster without the progress bar
 
 function Assert-Admin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -46,9 +47,11 @@ function Get-PythonLauncher {
 }
 
 function Invoke-Checked {
-    param([string]$Exe, [string[]]$Args)
-    & $Exe @Args
-    if ($LASTEXITCODE -ne 0) { throw "$Exe $($Args -join ' ') failed (exit $LASTEXITCODE)." }
+    param([string]$Exe, [string[]]$Arguments)
+    & $Exe @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Exe $($Arguments -join ' ') failed (exit $LASTEXITCODE)."
+    }
 }
 
 Assert-Admin
