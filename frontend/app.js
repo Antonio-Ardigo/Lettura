@@ -24,17 +24,18 @@ const statusEl = $("status");
 let selectedFile = null;
 let fullText = "";
 let textSentences = []; // strings, from /api/extract
-let layoutSentences = []; // [{text, boxes:[{page,x0,y0,x1,y1}]}], from /api/layout
+let layoutSentences = []; // [{text, boxes:[...]}], from /api/layout
 let pdfDoc = null;
 
 let mode = "text"; // "text" | "doc"
 let activeSentences = []; // strings the read-along will speak
-let activeHighlight = () => {}; // highlight(i) for the current mode
+let activeHighlight = () => {}; // sentence-level highlight for the current mode
 
 let playing = false;
 let currentIndex = 0;
 let currentAudioUrl = null;
 let endedResolver = null;
+let rafId = null;
 
 function setStatus(message, isError = false) {
   statusEl.textContent = message || "";
@@ -84,7 +85,6 @@ extractBtn.addEventListener("click", async () => {
     if (!res.ok) throw new Error(data.detail || "Estrazione non riuscita.");
     fullText = data.text;
     textSentences = data.sentences || [];
-    // Reset any rendered document from a previous file.
     pdfDoc = null;
     layoutSentences = [];
     docview.innerHTML = "";
@@ -102,15 +102,26 @@ extractBtn.addEventListener("click", async () => {
   }
 });
 
-// --- Text view ---
+// --- Text view (sentences split into word spans for word-level highlight) ---
 function renderReader() {
   reader.innerHTML = "";
   currentIndex = 0;
   textSentences.forEach((sentence, i) => {
     const span = document.createElement("span");
     span.className = "sentence";
-    span.textContent = sentence + " ";
     span.dataset.index = String(i);
+    sentence.split(/(\s+)/).forEach((token) => {
+      if (token === "") return;
+      if (/^\s+$/.test(token)) {
+        span.appendChild(document.createTextNode(token));
+      } else {
+        const word = document.createElement("span");
+        word.className = "word";
+        word.textContent = token;
+        span.appendChild(word);
+      }
+    });
+    span.appendChild(document.createTextNode(" "));
     span.addEventListener("click", () => {
       if (playing) stopReadAlong();
       startReadAlong(i);
@@ -264,6 +275,35 @@ async function synth(text) {
   return URL.createObjectURL(await res.blob());
 }
 
+function wavUrlFromBase64(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let k = 0; k < binary.length; k++) bytes[k] = binary.charCodeAt(k);
+  return URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+}
+
+// In the text view we request word timings to move a word-level highlight.
+async function fetchClip(text, aligned) {
+  if (!aligned) {
+    return { url: await synth(text), words: null };
+  }
+  const res = await fetch("/api/speak_aligned", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text,
+      voice: voiceSelect.value || undefined,
+      speed: Number(speed.value),
+    }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || "Sintesi vocale non riuscita.");
+  }
+  const data = await res.json();
+  return { url: wavUrlFromBase64(data.audio_base64), words: data.words };
+}
+
 function playUrl(url) {
   return new Promise((resolve) => {
     endedResolver = resolve;
@@ -274,7 +314,42 @@ function playUrl(url) {
   });
 }
 
-// --- Read-along (shared by both views via activeSentences/activeHighlight) ---
+// --- Word-level highlight, driven by the audio clock ---
+function startWordTracker(sentenceIndex, words) {
+  const sentenceEl = reader.querySelector(
+    `.sentence[data-index="${sentenceIndex}"]`
+  );
+  if (!sentenceEl) return;
+  const wordEls = sentenceEl.querySelectorAll(".word");
+  let last = -1;
+  const tick = () => {
+    const t = player.currentTime;
+    let active = words.findIndex((w) => t >= w.start && t < w.end);
+    if (active === -1 && words.length && t >= words[words.length - 1].end) {
+      active = words.length - 1;
+    }
+    if (active !== last) {
+      if (last >= 0 && wordEls[last]) wordEls[last].classList.remove("wordactive");
+      if (active >= 0 && wordEls[active]) {
+        wordEls[active].classList.add("wordactive");
+        wordEls[active].scrollIntoView({ block: "nearest", behavior: "smooth" });
+      }
+      last = active;
+    }
+    rafId = requestAnimationFrame(tick);
+  };
+  rafId = requestAnimationFrame(tick);
+}
+
+function stopWordTracker() {
+  if (rafId) cancelAnimationFrame(rafId);
+  rafId = null;
+  reader
+    .querySelectorAll(".word.wordactive")
+    .forEach((el) => el.classList.remove("wordactive"));
+}
+
+// --- Read-along (sentence highlight + word-level highlight in the text view) ---
 async function startReadAlong(from) {
   if (playing || activeSentences.length === 0) return;
   playing = true;
@@ -284,27 +359,32 @@ async function startReadAlong(from) {
   for (; playing && i < activeSentences.length; i++) {
     currentIndex = i;
     activeHighlight(i);
-    let url;
+    let clip;
     try {
-      url = await synth(activeSentences[i]);
+      clip = await fetchClip(activeSentences[i], mode === "text");
     } catch (err) {
       setStatus(err.message, true);
       break;
     }
     if (!playing) {
-      URL.revokeObjectURL(url);
+      URL.revokeObjectURL(clip.url);
       break;
     }
     setStatus("");
     if (currentAudioUrl) URL.revokeObjectURL(currentAudioUrl);
-    currentAudioUrl = url;
-    await playUrl(url); // resolves on "ended" or when stopped
+    currentAudioUrl = clip.url;
+    if (mode === "text" && clip.words && clip.words.length) {
+      startWordTracker(i, clip.words);
+    }
+    await playUrl(clip.url);
+    stopWordTracker();
   }
   if (i >= activeSentences.length) currentIndex = 0;
   stopReadAlong();
 }
 
 function stopReadAlong() {
+  stopWordTracker();
   if (!playing) {
     setReadAlongUI(false);
     return;

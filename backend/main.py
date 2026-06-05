@@ -12,6 +12,7 @@ leaves the machine and there are no API keys.
 """
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -19,7 +20,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import __version__, export, layout, pdf_extract, segment, tts
+from . import __version__, align, export, layout, pdf_extract, segment, tts
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB
@@ -111,6 +112,31 @@ def speak(req: SpeakRequest) -> Response:
     except RuntimeError as exc:  # Kokoro missing / synthesis failure
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return Response(content=audio, media_type="audio/wav")
+
+
+@app.post("/api/speak_aligned")
+def speak_aligned(req: SpeakRequest) -> dict:
+    """Synthesize one sentence; return base64 WAV plus per-word [start,end] times.
+
+    Used by the read-along view to move a word-level highlight as it plays.
+    """
+    if len(req.text) > MAX_TTS_CHARS:
+        raise HTTPException(status_code=413, detail="Text too long for alignment.")
+    try:
+        samples, sample_rate = tts.synthesize_array(
+            req.text, voice=req.voice, speed=req.speed
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    duration = len(samples) / sample_rate
+    wav = tts.to_wav_bytes(samples, sample_rate)
+    return {
+        "sample_rate": sample_rate,
+        "audio_base64": base64.b64encode(wav).decode("ascii"),
+        "words": align.align_words(req.text, duration),
+    }
 
 
 @app.post("/api/export")

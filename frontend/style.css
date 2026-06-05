@@ -90,10 +90,13 @@ button.playing:hover:not(:disabled) { background: #771f1f; }
   transition: background 0.15s;
 }
 .sentence:hover { background: #f1e7d8; }
-.sentence.active {
-  background: #ffe1b3;
-  box-shadow: 0 0 0 2px #ffe1b3;
+.sentence.active { background: #fff1da; }
+.word {
+  border-radius: 3px;
+  padding: 0 1px;
+  transition: background 0.1s ease;
 }
+.word.wordactive { background: #ffcf66; }
 
 .controls {
   display: flex;
