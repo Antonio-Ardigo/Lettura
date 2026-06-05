@@ -1,0 +1,27 @@
+# Lettura — offline, commercial-safe stack for reading Italian PDFs aloud.
+
+# Web API
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9   # multipart/form-data uploads
+
+# PDF text extraction (MIT-licensed)
+pdfplumber>=0.11
+pypdf>=4.2
+
+# OCR for scanned PDFs (optional at runtime).
+# Needs system packages: tesseract-ocr, tesseract-ocr-ita, poppler-utils.
+pytesseract>=0.3.10
+pdf2image>=1.17
+Pillow>=10.0
+
+# Text-to-speech: Kokoro via ONNX Runtime (Apache-2.0), Italian voices, offline.
+# Weights are fetched once from GitHub (no Hugging Face, no torch).
+# Needs the system package: espeak-ng.
+kokoro-onnx>=0.4.9
+onnxruntime>=1.17
+soundfile>=0.12
+numpy>=1.26
+
+# Audio export to MP3 / M4B (bundles a static ffmpeg; WAV export needs nothing).
+imageio-ffmpeg>=0.5

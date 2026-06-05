@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Generated audio / uploads
+*.wav
+*.mp3
+*.m4b
+/uploads/
+/output/
+# ...except the committed demo sample:
+!samples/esempio_lettura.wav
+
+# Model caches
+.cache/
+*.onnx
+*.pt
+/models/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Env
+.env

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lettura — leggi i PDF ad alta voce</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main class="app">
+    <header>
+      <h1>Lettura</h1>
+      <p class="tagline">Carica un PDF in italiano e ascoltalo letto ad alta voce.</p>
+    </header>
+
+    <section class="card">
+      <label for="file" class="filedrop" id="filedrop">
+        <input type="file" id="file" accept="application/pdf" hidden />
+        <span id="filelabel">Trascina qui un PDF o fai clic per sceglierlo</span>
+      </label>
+      <button id="extractBtn" disabled>Estrai testo</button>
+    </section>
+
+    <section class="card" id="resultCard" hidden>
+      <div class="meta" id="meta"></div>
+
+      <div class="viewtabs">
+        <button id="textViewBtn" class="tab active" type="button">Testo</button>
+        <button id="docViewBtn" class="tab" type="button">Documento</button>
+      </div>
+      <div id="reader" class="reader"></div>
+      <div id="docview" class="docview" hidden></div>
+
+      <div class="controls">
+        <label>Voce
+          <select id="voice"></select>
+        </label>
+        <label>Velocità <span id="speedval">1.0×</span>
+          <input type="range" id="speed" min="0.5" max="2" step="0.1" value="1" />
+        </label>
+        <button id="readAlongBtn">▶ Leggi con evidenziazione</button>
+        <button id="speakBtn" class="secondary">Leggi tutto</button>
+        <label>Formato
+          <select id="format">
+            <option value="wav">WAV</option>
+            <option value="mp3">MP3</option>
+            <option value="m4b">M4B</option>
+          </select>
+        </label>
+        <button id="downloadBtn" class="secondary">⬇ Scarica audio</button>
+      </div>
+
+      <audio id="player" controls hidden></audio>
+    </section>
+
+    <p class="status" id="status" role="status" aria-live="polite"></p>
+  </main>
+
+  <script src="/vendor/pdfjs/pdf.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

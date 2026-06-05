@@ -23,6 +23,24 @@ fi
 
 cd "${CLAUDE_PROJECT_DIR:-.}"
 
+# --- System packages (best-effort) ---
+# Lettura needs espeak-ng (Kokoro's Italian phonemiser) and, for OCR of scanned
+# PDFs, tesseract-ocr + the Italian pack and poppler-utils. Install them when
+# apt is available; skip quietly otherwise so the hook never blocks the session.
+if command -v apt-get >/dev/null 2>&1; then
+  SUDO=""
+  if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then SUDO="sudo"; fi
+  echo "[session-start] Installing system packages (espeak-ng, tesseract, poppler)..."
+  # 'update' may fail in restricted networks; don't let that block a cached install.
+  $SUDO apt-get update -y >/dev/null 2>&1 || true
+  if $SUDO apt-get install -y --no-install-recommends \
+       espeak-ng tesseract-ocr tesseract-ocr-ita poppler-utils >/dev/null 2>&1; then
+    echo "[session-start] System packages ready."
+  else
+    echo "[session-start] Note: system package install skipped/failed (continuing)."
+  fi
+fi
+
 echo "[session-start] Detecting project dependencies..."
 
 ran_something=false
@@ -53,8 +71,19 @@ if [ -f pyproject.toml ] || [ -f requirements.txt ]; then
     echo "[session-start] uv sync"
     uv sync
   elif [ -f requirements.txt ]; then
-    echo "[session-start] pip install -r requirements.txt"
-    pip install -r requirements.txt
+    # Install into a project virtualenv: it gives clean build tooling (some base
+    # images ship a patched system setuptools that can't build certain sdists,
+    # e.g. docopt) and keeps dependencies isolated.
+    VENV="$PWD/.venv"
+    [ -d "$VENV" ] || python3 -m venv "$VENV"
+    echo "[session-start] pip install -r requirements.txt (.venv)"
+    "$VENV/bin/python" -m pip install -U pip setuptools wheel
+    "$VENV/bin/python" -m pip install -r requirements.txt
+    # Make the venv the default interpreter for the rest of the session.
+    if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+      echo "export VIRTUAL_ENV=\"$VENV\"" >> "$CLAUDE_ENV_FILE"
+      echo "export PATH=\"$VENV/bin:\$PATH\"" >> "$CLAUDE_ENV_FILE"
+    fi
   fi
 fi
 
