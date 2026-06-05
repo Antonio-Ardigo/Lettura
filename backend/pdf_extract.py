@@ -40,6 +40,7 @@ class ExtractionResult:
     text: str
     page_count: int
     ocr_pages: list[int] = field(default_factory=list)
+    ocr_error: bool = False
 
     @property
     def ocr_used(self) -> bool:
@@ -83,19 +84,25 @@ def extract_pdf(pdf_bytes: bytes, *, ocr_fallback: bool = True) -> ExtractionRes
     """Extract cleaned Italian text from a PDF given as raw bytes."""
     pages: list[str] = []
     ocr_pages: list[int] = []
+    ocr_error = False
 
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         for index, page in enumerate(pdf.pages, start=1):
             page_text = page.extract_text() or ""
             if len(page_text.strip()) < _MIN_CHARS_FOR_TEXT_LAYER and ocr_fallback:
-                ocr_text = _ocr_page(pdf_bytes, index)
+                try:
+                    ocr_text = _ocr_page(pdf_bytes, index)
+                except Exception:  # noqa: BLE001 - OCR is best-effort
+                    ocr_text, ocr_error = "", True
                 if ocr_text.strip():
                     page_text = ocr_text
                     ocr_pages.append(index)
             pages.append(page_text)
 
     cleaned = clean_text("\n\n".join(pages))
-    return ExtractionResult(text=cleaned, page_count=len(pages), ocr_pages=ocr_pages)
+    return ExtractionResult(
+        text=cleaned, page_count=len(pages), ocr_pages=ocr_pages, ocr_error=ocr_error
+    )
 
 
 def extract_pages(pdf_bytes: bytes, *, ocr_fallback: bool = True) -> list[str]:
@@ -105,7 +112,10 @@ def extract_pages(pdf_bytes: bytes, *, ocr_fallback: bool = True) -> list[str]:
         for index, page in enumerate(pdf.pages, start=1):
             page_text = page.extract_text() or ""
             if len(page_text.strip()) < _MIN_CHARS_FOR_TEXT_LAYER and ocr_fallback:
-                ocr_text = _ocr_page(pdf_bytes, index)
+                try:
+                    ocr_text = _ocr_page(pdf_bytes, index)
+                except Exception:  # noqa: BLE001 - OCR is best-effort
+                    ocr_text = ""
                 if ocr_text.strip():
                     page_text = ocr_text
             out.append(clean_text(page_text))

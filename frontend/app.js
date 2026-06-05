@@ -94,7 +94,15 @@ extractBtn.addEventListener("click", async () => {
       `${data.page_count} pagine · ${textSentences.length} frasi · ${data.char_count} caratteri` +
       (data.ocr_used ? ` · OCR sulle pagine ${data.ocr_pages.join(", ")}` : "");
     resultCard.hidden = false;
-    setStatus("");
+    if (data.ocr_error) {
+      setStatus(
+        "Alcune pagine sembrano scansionate ma l'OCR non è disponibile — " +
+          "installa Tesseract con la lingua italiana (ita.traineddata).",
+        true
+      );
+    } else {
+      setStatus("");
+    }
   } catch (err) {
     setStatus(err.message, true);
   } finally {

@@ -78,6 +78,7 @@ async def extract(file: UploadFile = File(...)) -> dict:
         "page_count": result.page_count,
         "ocr_used": result.ocr_used,
         "ocr_pages": result.ocr_pages,
+        "ocr_error": result.ocr_error,
         "char_count": len(result.text),
     }
 
