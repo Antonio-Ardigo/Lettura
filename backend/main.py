@@ -19,11 +19,13 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import __version__, pdf_extract, segment, tts
+from . import __version__, export, pdf_extract, segment, tts
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB
 MAX_TTS_CHARS = 20_000  # guardrail per /api/speak request
+MAX_EXPORT_CHARS = 500_000  # ~ several hours of audio per /api/export request
+_EXPORT_MEDIA = {"wav": "audio/wav", "mp3": "audio/mpeg", "m4b": "audio/mp4"}
 
 app = FastAPI(title="Lettura", version=__version__)
 
@@ -32,6 +34,13 @@ class SpeakRequest(BaseModel):
     text: str = Field(min_length=1)
     voice: str = tts.DEFAULT_VOICE
     speed: float = Field(default=1.0, ge=0.5, le=2.0)
+
+
+class ExportRequest(BaseModel):
+    text: str = Field(min_length=1)
+    voice: str = tts.DEFAULT_VOICE
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    format: str = "wav"
 
 
 @app.get("/api/health")
@@ -86,6 +95,37 @@ def speak(req: SpeakRequest) -> Response:
     except RuntimeError as exc:  # Kokoro missing / synthesis failure
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return Response(content=audio, media_type="audio/wav")
+
+
+@app.post("/api/export")
+def export_audio(req: ExportRequest) -> Response:
+    """Synthesize a whole document into one downloadable audio file.
+
+    This is a batch job: long documents take a while (minutes for ~1 hour of
+    audio on CPU). WAV needs no extra tools; MP3/M4B require ffmpeg.
+    """
+    fmt = req.format.lower()
+    if fmt not in _EXPORT_MEDIA:
+        raise HTTPException(status_code=400, detail="format must be wav, mp3, or m4b.")
+    if len(req.text) > MAX_EXPORT_CHARS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Text exceeds {MAX_EXPORT_CHARS} characters.",
+        )
+    try:
+        audio, sample_rate = export.synthesize_long(
+            req.text, voice=req.voice, speed=req.speed
+        )
+        data = export.encode(audio, sample_rate, fmt=fmt)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:  # Kokoro / ffmpeg missing
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return Response(
+        content=data,
+        media_type=_EXPORT_MEDIA[fmt],
+        headers={"Content-Disposition": f'attachment; filename="lettura.{fmt}"'},
+    )
 
 
 # --- Static frontend (mounted last so it doesn't shadow /api routes) ---

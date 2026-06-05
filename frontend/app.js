@@ -13,6 +13,8 @@ const speed = $("speed");
 const speedVal = $("speedval");
 const readAlongBtn = $("readAlongBtn");
 const speakBtn = $("speakBtn");
+const formatSel = $("format");
+const downloadBtn = $("downloadBtn");
 const player = $("player");
 const statusEl = $("status");
 
@@ -245,4 +247,50 @@ speakBtn.addEventListener("click", async () => {
   }
 });
 
+// --- Download a single audio file of the whole document ---
+downloadBtn.addEventListener("click", async () => {
+  if (!fullText.trim()) {
+    setStatus("Non c'è testo da scaricare.", true);
+    return;
+  }
+  stopReadAlong();
+  const fmt = formatSel.value;
+  downloadBtn.disabled = true;
+  setStatus(
+    `Generazione del file ${fmt.toUpperCase()}… ` +
+      "(per documenti lunghi può richiedere minuti)"
+  );
+  try {
+    const res = await fetch("/api/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: fullText,
+        voice: voiceSelect.value || undefined,
+        speed: Number(speed.value),
+        format: fmt,
+      }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || "Esportazione non riuscita.");
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `lettura.${fmt}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    setStatus("File scaricato.");
+  } catch (err) {
+    setStatus(err.message, true);
+  } finally {
+    downloadBtn.disabled = false;
+  }
+});
+
 loadVoices();
+

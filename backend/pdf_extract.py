@@ -96,3 +96,17 @@ def extract_pdf(pdf_bytes: bytes, *, ocr_fallback: bool = True) -> ExtractionRes
 
     cleaned = clean_text("\n\n".join(pages))
     return ExtractionResult(text=cleaned, page_count=len(pages), ocr_pages=ocr_pages)
+
+
+def extract_pages(pdf_bytes: bytes, *, ocr_fallback: bool = True) -> list[str]:
+    """Return cleaned text for each page separately (useful for chapters)."""
+    out: list[str] = []
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        for index, page in enumerate(pdf.pages, start=1):
+            page_text = page.extract_text() or ""
+            if len(page_text.strip()) < _MIN_CHARS_FOR_TEXT_LAYER and ocr_fallback:
+                ocr_text = _ocr_page(pdf_bytes, index)
+                if ocr_text.strip():
+                    page_text = ocr_text
+            out.append(clean_text(page_text))
+    return out
