@@ -15,6 +15,8 @@ env/
 *.m4b
 /uploads/
 /output/
+# ...except the committed demo sample:
+!samples/esempio_lettura.wav
 
 # Model caches
 .cache/
