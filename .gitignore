@@ -31,3 +31,6 @@ env/
 
 # Env
 .env
+
+# Benchmark artifacts (generated)
+/bench/pdfs/
