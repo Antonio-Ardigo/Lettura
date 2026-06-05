@@ -71,8 +71,19 @@ if [ -f pyproject.toml ] || [ -f requirements.txt ]; then
     echo "[session-start] uv sync"
     uv sync
   elif [ -f requirements.txt ]; then
-    echo "[session-start] pip install -r requirements.txt"
-    pip install -r requirements.txt
+    # Install into a project virtualenv: it gives clean build tooling (some base
+    # images ship a patched system setuptools that can't build certain sdists,
+    # e.g. docopt) and keeps dependencies isolated.
+    VENV="$PWD/.venv"
+    [ -d "$VENV" ] || python3 -m venv "$VENV"
+    echo "[session-start] pip install -r requirements.txt (.venv)"
+    "$VENV/bin/python" -m pip install -U pip setuptools wheel
+    "$VENV/bin/python" -m pip install -r requirements.txt
+    # Make the venv the default interpreter for the rest of the session.
+    if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+      echo "export VIRTUAL_ENV=\"$VENV\"" >> "$CLAUDE_ENV_FILE"
+      echo "export PATH=\"$VENV/bin:\$PATH\"" >> "$CLAUDE_ENV_FILE"
+    fi
   fi
 fi
 
