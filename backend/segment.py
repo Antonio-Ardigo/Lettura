@@ -57,3 +57,16 @@ def _is_real_boundary(paragraph: str, punct_pos: int, after_pos: int) -> bool:
     # A lowercase start after the break usually means it wasn't a real end.
     nxt = paragraph[after_pos:after_pos + 1]
     return not nxt.islower()
+
+
+def is_sentence_end(word: str) -> bool:
+    """True if this word token ends a sentence (terminal punctuation, not abbrev).
+
+    Used to segment a stream of positioned PDF words so each sentence can be
+    mapped to its bounding boxes on the page.
+    """
+    trimmed = word.rstrip("\"»”'’)]")
+    if not trimmed or trimmed[-1] not in ".!?…":
+        return False
+    token = trimmed.rstrip(".!?…").lower()
+    return token not in _ABBREVIATIONS and len(token) > 1

@@ -8,6 +8,9 @@ const extractBtn = $("extractBtn");
 const resultCard = $("resultCard");
 const meta = $("meta");
 const reader = $("reader");
+const docview = $("docview");
+const textViewBtn = $("textViewBtn");
+const docViewBtn = $("docViewBtn");
 const voiceSelect = $("voice");
 const speed = $("speed");
 const speedVal = $("speedval");
@@ -19,8 +22,15 @@ const player = $("player");
 const statusEl = $("status");
 
 let selectedFile = null;
-let sentences = [];
 let fullText = "";
+let textSentences = []; // strings, from /api/extract
+let layoutSentences = []; // [{text, boxes:[{page,x0,y0,x1,y1}]}], from /api/layout
+let pdfDoc = null;
+
+let mode = "text"; // "text" | "doc"
+let activeSentences = []; // strings the read-along will speak
+let activeHighlight = () => {}; // highlight(i) for the current mode
+
 let playing = false;
 let currentIndex = 0;
 let currentAudioUrl = null;
@@ -73,10 +83,15 @@ extractBtn.addEventListener("click", async () => {
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Estrazione non riuscita.");
     fullText = data.text;
-    sentences = data.sentences || [];
+    textSentences = data.sentences || [];
+    // Reset any rendered document from a previous file.
+    pdfDoc = null;
+    layoutSentences = [];
+    docview.innerHTML = "";
     renderReader();
+    setMode("text", { force: true });
     meta.textContent =
-      `${data.page_count} pagine · ${sentences.length} frasi · ${data.char_count} caratteri` +
+      `${data.page_count} pagine · ${textSentences.length} frasi · ${data.char_count} caratteri` +
       (data.ocr_used ? ` · OCR sulle pagine ${data.ocr_pages.join(", ")}` : "");
     resultCard.hidden = false;
     setStatus("");
@@ -87,11 +102,11 @@ extractBtn.addEventListener("click", async () => {
   }
 });
 
-// --- Reader rendering ---
+// --- Text view ---
 function renderReader() {
   reader.innerHTML = "";
   currentIndex = 0;
-  sentences.forEach((sentence, i) => {
+  textSentences.forEach((sentence, i) => {
     const span = document.createElement("span");
     span.className = "sentence";
     span.textContent = sentence + " ";
@@ -104,7 +119,7 @@ function renderReader() {
   });
 }
 
-function highlight(i) {
+function highlightText(i) {
   reader
     .querySelectorAll(".sentence.active")
     .forEach((el) => el.classList.remove("active"));
@@ -114,6 +129,100 @@ function highlight(i) {
     el.scrollIntoView({ block: "center", behavior: "smooth" });
   }
 }
+
+// --- Document view (PDF.js render + box overlay) ---
+async function ensurePdfRendered() {
+  if (pdfDoc) return;
+  const pdfjsLib = window.pdfjsLib;
+  if (!pdfjsLib) throw new Error("PDF.js non disponibile.");
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.js";
+  const buffer = await selectedFile.arrayBuffer();
+  pdfDoc = await pdfjsLib.getDocument({ data: buffer }).promise;
+  docview.innerHTML = "";
+  for (let p = 1; p <= pdfDoc.numPages; p++) {
+    const page = await pdfDoc.getPage(p);
+    const viewport = page.getViewport({ scale: 1.4 });
+    const pageDiv = document.createElement("div");
+    pageDiv.className = "pdf-page";
+    pageDiv.style.width = `${viewport.width}px`;
+    pageDiv.style.height = `${viewport.height}px`;
+    const canvas = document.createElement("canvas");
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const overlay = document.createElement("div");
+    overlay.className = "overlay";
+    overlay.dataset.page = String(p - 1);
+    pageDiv.appendChild(canvas);
+    pageDiv.appendChild(overlay);
+    docview.appendChild(pageDiv);
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+  }
+}
+
+async function fetchLayout() {
+  const form = new FormData();
+  form.append("file", selectedFile);
+  const res = await fetch("/api/layout", { method: "POST", body: form });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || "Analisi del layout non riuscita.");
+  layoutSentences = data.sentences || [];
+}
+
+function highlightDoc(i) {
+  docview.querySelectorAll(".hl").forEach((el) => el.remove());
+  const sentence = layoutSentences[i];
+  if (!sentence) return;
+  let first = null;
+  sentence.boxes.forEach((box) => {
+    const overlay = docview.querySelector(`.overlay[data-page="${box.page}"]`);
+    if (!overlay) return;
+    const w = overlay.clientWidth;
+    const h = overlay.clientHeight;
+    const hl = document.createElement("div");
+    hl.className = "hl";
+    hl.style.left = `${box.x0 * w}px`;
+    hl.style.top = `${box.y0 * h}px`;
+    hl.style.width = `${(box.x1 - box.x0) * w}px`;
+    hl.style.height = `${(box.y1 - box.y0) * h}px`;
+    overlay.appendChild(hl);
+    if (!first) first = hl;
+  });
+  if (first) first.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+// --- View switching ---
+async function setMode(next, { force = false } = {}) {
+  if (mode === next && !force) return;
+  stopReadAlong();
+  mode = next;
+  textViewBtn.classList.toggle("active", mode === "text");
+  docViewBtn.classList.toggle("active", mode === "doc");
+  reader.hidden = mode !== "text";
+  docview.hidden = mode !== "doc";
+
+  if (mode === "doc") {
+    setStatus("Rendering del documento…");
+    try {
+      await ensurePdfRendered();
+      if (layoutSentences.length === 0) await fetchLayout();
+      activeSentences = layoutSentences.map((s) => s.text);
+      activeHighlight = highlightDoc;
+      setStatus(
+        layoutSentences.length === 0
+          ? "Nessun testo selezionabile in questa pagina (forse è scansionata)."
+          : ""
+      );
+    } catch (err) {
+      setStatus(err.message, true);
+    }
+  } else {
+    activeSentences = textSentences;
+    activeHighlight = highlightText;
+  }
+}
+
+textViewBtn.addEventListener("click", () => setMode("text"));
+docViewBtn.addEventListener("click", () => setMode("doc"));
 
 // --- Voices + speed ---
 async function loadVoices() {
@@ -165,19 +274,19 @@ function playUrl(url) {
   });
 }
 
-// --- Read-along (sentence by sentence with highlighting) ---
+// --- Read-along (shared by both views via activeSentences/activeHighlight) ---
 async function startReadAlong(from) {
-  if (playing || sentences.length === 0) return;
+  if (playing || activeSentences.length === 0) return;
   playing = true;
   setReadAlongUI(true);
-  setStatus("Generazione dell'audio… (la prima volta scarica il modello)");
+  setStatus("Generazione dell'audio…");
   let i = from;
-  for (; playing && i < sentences.length; i++) {
+  for (; playing && i < activeSentences.length; i++) {
     currentIndex = i;
-    highlight(i);
+    activeHighlight(i);
     let url;
     try {
-      url = await synth(sentences[i]);
+      url = await synth(activeSentences[i]);
     } catch (err) {
       setStatus(err.message, true);
       break;
@@ -191,7 +300,7 @@ async function startReadAlong(from) {
     currentAudioUrl = url;
     await playUrl(url); // resolves on "ended" or when stopped
   }
-  if (i >= sentences.length) currentIndex = 0; // finished naturally
+  if (i >= activeSentences.length) currentIndex = 0;
   stopReadAlong();
 }
 
@@ -292,5 +401,6 @@ downloadBtn.addEventListener("click", async () => {
   }
 });
 
+activeSentences = textSentences;
+activeHighlight = highlightText;
 loadVoices();
-

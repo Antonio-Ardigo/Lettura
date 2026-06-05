@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import __version__, export, pdf_extract, segment, tts
+from . import __version__, export, layout, pdf_extract, segment, tts
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB
@@ -79,6 +79,22 @@ async def extract(file: UploadFile = File(...)) -> dict:
         "ocr_pages": result.ocr_pages,
         "char_count": len(result.text),
     }
+
+
+@app.post("/api/layout")
+async def pdf_layout(file: UploadFile = File(...)) -> dict:
+    """Per-sentence bounding boxes for highlighting on the rendered PDF."""
+    if (file.content_type or "").lower() not in {"application/pdf", "application/x-pdf"}:
+        raise HTTPException(status_code=415, detail="Please upload a PDF file.")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="The uploaded PDF is empty.")
+    if len(data) > MAX_PDF_BYTES:
+        raise HTTPException(status_code=413, detail="PDF exceeds the 50 MB limit.")
+    try:
+        return layout.extract_layout(data)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Could not read PDF: {exc}") from exc
 
 
 @app.post("/api/speak")

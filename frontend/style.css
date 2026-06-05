@@ -110,3 +110,40 @@ audio { width: 100%; margin-top: 1rem; }
 
 .status { text-align: center; color: var(--muted); min-height: 1.5em; }
 .status.error { color: #b00020; }
+
+/* View tabs */
+.viewtabs { display: flex; gap: 0.5rem; margin-bottom: 0.6rem; }
+.tab {
+  margin: 0;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 0.35rem 0.9rem;
+  font-size: 0.9rem;
+}
+.tab:hover:not(:disabled) { background: #f1e7d8; }
+.tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* Document view (rendered PDF + highlight overlay) */
+.docview {
+  max-height: 60vh;
+  overflow: auto;
+  background: #efe9e0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+}
+.pdf-page { position: relative; box-shadow: 0 1px 6px rgba(0, 0, 0, 0.15); }
+.pdf-page canvas { display: block; }
+.overlay { position: absolute; inset: 0; pointer-events: none; }
+.hl {
+  position: absolute;
+  background: rgba(255, 200, 80, 0.45);
+  border-radius: 2px;
+  mix-blend-mode: multiply;
+  transition: all 0.1s ease;
+}
