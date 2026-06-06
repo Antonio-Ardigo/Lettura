@@ -546,55 +546,83 @@ function stopWordTracker() {
 
 // --- Segmentation: group consecutive readable sentences up to ~N words so the
 // narration flows naturally and starts as soon as one segment is ready. ---
-function wordCount(s) {
-  return s.split(/\s+/).filter(Boolean).length;
+function sentenceWords(si) {
+  return (activeSentences[si] || "").split(/\s+/).filter(Boolean);
 }
 
-// Describe what to do starting at sentence `start`:
-//   {kind:"seg", indices, text, next} — a playable segment
-//   {kind:"ocr", page}                — a scanned page to OCR first
-//   {kind:"skip", next}               — an unreadable sentence to skip
-//   null                              — nothing left
-function segmentAt(start) {
+// A reading position: sentence index `si` + word offset `wi` within it, so a
+// long sentence can be split into several ~SEGMENT_WORDS clips (shorter clips
+// synthesize faster -> playback starts sooner and waits stay short).
+function posKey(pos) {
+  return `${pos.si}:${pos.wi || 0}`;
+}
+
+// Describe what to do starting at reading position `pos`:
+//   {kind:"seg", ranges:[{si,w0,w1}], text, next} — a playable segment
+//   {kind:"ocr", page}  — a scanned page to OCR first
+//   {kind:"skip", next} — an unreadable sentence to skip
+//   null                — nothing left
+function segmentFrom(pos) {
   const n = activeSentences.length;
-  if (start >= n) return null;
-  if (mode === "text") {
-    const m = sentenceMeta[start] || {};
-    if (m.failed) return { kind: "skip", next: start + 1 };
+  const si = pos.si;
+  const wi = pos.wi || 0;
+  if (si >= n) return null;
+  if (mode === "text" && wi === 0) {
+    const m = sentenceMeta[si] || {};
+    if (m.failed) return { kind: "skip", next: { si: si + 1, wi: 0 } };
     if (m.placeholder) return { kind: "ocr", page: m.page };
   }
-  const indices = [start];
-  let words = wordCount(activeSentences[start]);
-  let j = start + 1;
-  if (mode === "text") {
-    // Group only in the text view; the doc view highlights one sentence's boxes
-    // at a time, so it stays one-sentence-per-segment.
-    while (j < n && words < SEGMENT_WORDS) {
+  if (mode !== "text") {
+    // Doc view highlights one sentence's boxes at a time: one sentence/segment.
+    return {
+      kind: "seg",
+      ranges: [{ si, w0: 0, w1: -1 }],
+      text: activeSentences[si],
+      next: { si: si + 1, wi: 0 },
+    };
+  }
+  const words = sentenceWords(si);
+  // Case A: at a sentence boundary and the sentence is short — group whole short
+  // sentences up to ~SEGMENT_WORDS for natural prosody.
+  if (wi === 0 && words.length <= SEGMENT_WORDS) {
+    const ranges = [{ si, w0: 0, w1: words.length }];
+    const parts = [words.join(" ")];
+    let total = words.length;
+    let j = si + 1;
+    while (j < n && total < SEGMENT_WORDS) {
       const m = sentenceMeta[j] || {};
       if (m.placeholder || m.failed) break;
-      indices.push(j);
-      words += wordCount(activeSentences[j]);
+      const wj = sentenceWords(j);
+      if (total + wj.length > SEGMENT_WORDS) break; // don't overshoot
+      ranges.push({ si: j, w0: 0, w1: wj.length });
+      parts.push(wj.join(" "));
+      total += wj.length;
       j += 1;
     }
+    return { kind: "seg", ranges, text: parts.join(" "), next: { si: j, wi: 0 } };
   }
+  // Case B: a ~SEGMENT_WORDS slice of one long sentence (or continuing mid-way).
+  const w1 = Math.min(wi + SEGMENT_WORDS, words.length);
+  const next = w1 >= words.length ? { si: si + 1, wi: 0 } : { si, wi: w1 };
   return {
     kind: "seg",
-    indices,
-    text: indices.map((k) => activeSentences[k]).join(" "),
-    next: j,
+    ranges: [{ si, w0: wi, w1 }],
+    text: words.slice(wi, w1).join(" "),
+    next,
   };
 }
 
 // --- Prefetch pipeline: synthesize the next segment while the current plays ---
-function ensureClip(startIndex) {
-  if (prefetch.has(startIndex)) return prefetch.get(startIndex);
-  const seg = segmentAt(startIndex);
+function ensureClip(pos) {
+  const key = posKey(pos);
+  if (prefetch.has(key)) return prefetch.get(key);
+  const seg = segmentFrom(pos);
   if (!seg || seg.kind !== "seg") return null;
   const p = fetchClip(seg.text, mode === "text").then((clip) => ({
     ...clip,
     seg,
   }));
-  prefetch.set(startIndex, p);
+  prefetch.set(key, p);
   return p;
 }
 
@@ -609,22 +637,25 @@ function clearPrefetch() {
   prefetch.clear();
 }
 
-// Highlight every sentence in a segment and wire the word tracker across them.
+// Highlight a segment's sentences and wire the word tracker across the exact
+// word elements it covers (a slice, for a split long sentence).
 function highlightSegment(seg, words) {
   if (mode !== "text") {
-    activeHighlight(seg.indices[0]); // doc view: bounding-box highlight
+    activeHighlight(seg.ranges[0].si); // doc view: bounding-box highlight
     return;
   }
   reader
     .querySelectorAll(".sentence.active")
     .forEach((el) => el.classList.remove("active"));
   const wordEls = [];
-  seg.indices.forEach((idx, k) => {
-    const el = reader.querySelector(`.sentence[data-index="${idx}"]`);
+  seg.ranges.forEach((r, k) => {
+    const el = reader.querySelector(`.sentence[data-index="${r.si}"]`);
     if (!el) return;
     el.classList.add("active");
     if (k === 0) el.scrollIntoView({ block: "center", behavior: "smooth" });
-    el.querySelectorAll(".word").forEach((w) => wordEls.push(w));
+    const spans = el.querySelectorAll(".word");
+    const end = r.w1 < 0 ? spans.length : Math.min(r.w1, spans.length);
+    for (let w = r.w0; w < end; w++) wordEls.push(spans[w]);
   });
   if (words && words.length) startWordTracker(wordEls, words);
 }
@@ -639,18 +670,19 @@ async function startReadAlong(from) {
     /* ignore */
   }
   clearPrefetch();
-  let i = firstReadableFrom(from == null ? 0 : from);
-  if (i < 0 || i >= activeSentences.length) {
+  const startSi = firstReadableFrom(from == null ? 0 : from);
+  if (startSi < 0 || startSi >= activeSentences.length) {
     setReadAlongUI(false);
     return;
   }
+  let pos = { si: startSi, wi: 0 };
   setReadAlongUI(true);
 
-  while (myToken === playToken && i < activeSentences.length) {
-    const seg = segmentAt(i);
+  while (myToken === playToken && pos.si < activeSentences.length) {
+    const seg = segmentFrom(pos);
     if (!seg) break;
     if (seg.kind === "skip") {
-      i = seg.next;
+      pos = seg.next;
       continue;
     }
     if (seg.kind === "ocr") {
@@ -662,8 +694,9 @@ async function startReadAlong(from) {
       setStatus("");
       clearPrefetch();
       const resume = firstIndexForPage(seg.page);
-      i = resume >= 0 ? resume : firstReadableFrom(i + 1);
-      if (i < 0) break;
+      const r = resume >= 0 ? resume : firstReadableFrom(pos.si + 1);
+      if (r < 0) break;
+      pos = { si: r, wi: 0 };
       continue;
     }
 
@@ -675,7 +708,7 @@ async function startReadAlong(from) {
     );
     let clip;
     try {
-      clip = await ensureClip(i);
+      clip = await ensureClip(pos);
     } catch (err) {
       clearTimeout(prepTimer);
       if (myToken === playToken) setStatus(err.message, true);
@@ -688,19 +721,19 @@ async function startReadAlong(from) {
     }
     hideProgress();
     setStatus("");
-    prefetch.delete(i); // consumed; ownership moves to currentAudioUrl
+    prefetch.delete(posKey(pos)); // consumed; ownership moves to currentAudioUrl
 
     // Kick off synthesis of the NEXT segment while this one plays.
-    if (seg.next < activeSentences.length) ensureClip(seg.next);
+    if (seg.next.si < activeSentences.length) ensureClip(seg.next);
 
-    currentIndex = i;
+    currentIndex = pos.si;
     if (currentAudioUrl) URL.revokeObjectURL(currentAudioUrl);
     currentAudioUrl = clip.url;
     highlightSegment(seg, clip.words);
     const outcome = await playSegment(clip.url, myToken);
     stopWordTracker();
     if (myToken !== playToken || outcome === "stopped") return;
-    i = seg.next;
+    pos = seg.next;
   }
   if (myToken !== playToken) return;
   currentIndex = 0;
