@@ -18,6 +18,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
+import ftfy
 import pdfplumber
 
 # OCR is an optional dependency. Import defensively so the app still runs (for
@@ -74,6 +75,20 @@ _ACCENT_RE = re.compile(
 # real words/titles produce — never natural single-letter words (all vowels).
 _DESPACE_RE = re.compile(r"(?<!\S)([^\W\d_](?: [^\W\d_]){3,})(?!\S)")
 
+# Invisible characters that corrupt words when extracted: soft hyphen + the
+# zero-width family + BOM. Removed outright (they carry no spoken meaning).
+_INVISIBLE_RE = re.compile("[\u00ad\u200b\u200c\u200d\u2060\ufeff]")
+
+# Italian months for spelling out numeric dates (the day/year are left as digits
+# — espeak-ng reads Italian numbers correctly, it only mishandles the "/"s).
+_MONTHS = {
+    1: "gennaio", 2: "febbraio", 3: "marzo", 4: "aprile", 5: "maggio",
+    6: "giugno", 7: "luglio", 8: "agosto", 9: "settembre", 10: "ottobre",
+    11: "novembre", 12: "dicembre",
+}
+# A full numeric date with a 4-digit year (unambiguously a date, not a fraction).
+_DATE_RE = re.compile(r"\b(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})\b")
+
 # --- Curated accent lexicon -------------------------------------------------
 # Bare (unaccented) forms -> correctly accented form, for words extracted without
 # their accent. DELIBERATELY narrow: only words whose accented form is the only
@@ -100,6 +115,23 @@ _ACCENT_LEXICON = {
     "quantita": "quantità", "proprieta": "proprietà", "maesta": "maestà",
     "virtu": "virtù", "gioventu": "gioventù", "servitu": "servitù",
     "schiavitu": "schiavitù",
+    # more high-frequency -tà nouns whose bare form is NOT an Italian word/verb
+    # (collisions with verb conjugations — gravita, stabilita, necessita,
+    # felicita, abilita, capacita, unita — are deliberately omitted)
+    "curiosita": "curiosità", "dignita": "dignità", "poverta": "povertà",
+    "priorita": "priorità", "responsabilita": "responsabilità",
+    "serieta": "serietà", "varieta": "varietà", "volonta": "volontà",
+    "opportunita": "opportunità", "personalita": "personalità",
+    "profondita": "profondità", "localita": "località", "modalita": "modalità",
+    "attualita": "attualità", "diversita": "diversità", "entita": "entità",
+    "fedelta": "fedeltà", "finalita": "finalità", "utilita": "utilità",
+    "vanita": "vanità", "visibilita": "visibilità", "generosita": "generosità",
+    "pubblicita": "pubblicità", "sincerita": "sincerità", "eternita": "eternità",
+    "intensita": "intensità", "maturita": "maturità", "oscurita": "oscurità",
+    "tranquillita": "tranquillità",
+    # adverbs of place/manner and a couple of common -è/-ù words
+    "giu": "giù", "lassu": "lassù", "laggiu": "laggiù", "quaggiu": "quaggiù",
+    "quassu": "quassù", "caffe": "caffè",
     # unambiguous "puo" (not a word) -> può
     "puo": "può",
     # borderline: "pero" is also "pear tree", but in adult prose "però" dominates
@@ -155,12 +187,40 @@ def _despace_repl(match: re.Match) -> str:
     return match.group(0)
 
 
+def _date_repl(match: re.Match) -> str:
+    """Spell a numeric date's month (12/03/2026 -> "12 marzo 2026").
+
+    Italian convention is day/month/year; the day and year stay as digits because
+    espeak-ng reads Italian numbers correctly — it only mis-speaks the "/" as
+    "barra". The 1st of the month becomes "primo", as Italian requires.
+    """
+    day, month, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
+    if not (1 <= day <= 31 and 1 <= month <= 12):
+        return match.group(0)  # not a real date (e.g. a fraction) — leave it
+    day_word = "primo" if day == 1 else str(day)
+    return f"{day_word} {_MONTHS[month]} {year}"
+
+
+def fix_extraction_artifacts(text: str) -> str:
+    """Repair encoding-level damage from PDF/EPUB extraction before cleanup.
+
+    ftfy fixes mojibake ("perchÃ©"), broken ligatures, mis-decoded quotes and
+    stray control characters, and composes to NFC; then we drop invisible
+    characters (soft hyphen, zero-width marks, BOM) that split words silently.
+    """
+    if not text:
+        return text
+    text = ftfy.fix_text(text)
+    return _INVISIBLE_RE.sub("", text)
+
+
 def normalize_for_speech(text: str) -> str:
     """Make extracted text read correctly aloud.
 
     - fold vowel+apostrophe accents (perche' -> perché), keeping elisions (l'amico)
     - rejoin letter-spaced words ("p a r o l a" -> "parola")
     - restore accents on a curated set of unambiguous words (citta -> città)
+    - spell numeric dates' months (12/03/2026 -> "12 marzo 2026")
     - normalise ellipses ("...", ". . .") to a single "…" suspension pause
 
     ``!``/``?`` and parentheses are left untouched: Kokoro already reads them as
@@ -173,6 +233,7 @@ def normalize_for_speech(text: str) -> str:
     text = _ACCENT_RE.sub(_accent_repl, text)
     text = _DESPACE_RE.sub(_despace_repl, text)
     text = _LEXICON_RE.sub(_lexicon_repl, text)
+    text = _DATE_RE.sub(_date_repl, text)
     text = _ELLIPSIS_DOTS_RE.sub("…", text)
     text = _ELLIPSIS_TIDY_RE.sub("…", text)
     return text
@@ -228,14 +289,17 @@ def _ocr_page(pdf_bytes: bytes, page_number: int) -> str:
 def clean_text(raw: str) -> str:
     """Tidy extracted text so it flows when read aloud.
 
+    - repair encoding artifacts (mojibake, ligatures, invisibles) up front
     - join words split across line breaks ("paro-\\nla" -> "parola")
     - keep blank lines as paragraph separators
     - collapse single newlines inside a paragraph into spaces
     - normalise repeated whitespace
     - fold vowel+apostrophe accents and rejoin letter-spaced words for speech
     """
+    # Repair encoding-level damage first, so later steps see correct codepoints.
+    text = fix_extraction_artifacts(raw)
     # De-hyphenate words broken across lines.
-    text = re.sub(r"(\w)-\n(\w)", r"\1\2", raw)
+    text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)
     # Mark real paragraph breaks (a blank line = two or more newlines).
     text = re.sub(r"\n[ \t]*\n+", _PARAGRAPH, text)
     # Remaining single newlines are soft wraps -> spaces.

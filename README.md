@@ -20,6 +20,7 @@ format. The rendered-document view is PDF-only.
 |---|---|---|
 | Web API | FastAPI + Uvicorn | MIT / BSD |
 | PDF text extraction | [pdfplumber](https://github.com/jsvine/pdfplumber), pypdf | MIT |
+| Text repair for speech | [ftfy](https://github.com/rspeer/python-ftfy) (mojibake, ligatures) | Apache-2.0 |
 | OCR (scanned PDFs) | Tesseract + `ita` pack | Apache-2.0 |
 | Text-to-speech | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) via ONNX | Apache-2.0 |
 | PDF rendering (browser) | [PDF.js](https://github.com/mozilla/pdf.js) (vendored) | Apache-2.0 |
@@ -55,7 +56,7 @@ exported. The TTS model is **warmed up in the background at startup** so the
 first synthesis isn't blocked on the ~90 MB download.
 
 - `backend/documents.py` — type dispatch for PDF/EPUB/HTML; stdlib EPUB + HTML text extraction
-- `backend/pdf_extract.py` — fast extract (`extract_quick`), on-demand OCR (`ocr_page_text`), OCR sanitisation (`ocr_clean`), speech normalisation (`normalize_for_speech`)
+- `backend/pdf_extract.py` — fast extract (`extract_quick`), on-demand OCR (`ocr_page_text`), OCR sanitisation (`ocr_clean`), artifact repair (`fix_extraction_artifacts`: ftfy + invisible-char strip) and speech normalisation (`normalize_for_speech`: accents, curated accent lexicon, numeric-date months, ellipsis → `…`)
 - `backend/store.py` — small in-memory TTL caches: uploaded PDFs (`doc_id`) and export jobs (`job_id`)
 - `backend/segment.py` — Italian sentence segmentation
 - `backend/layout.py` — per-sentence bounding boxes on the page (`/api/layout`)

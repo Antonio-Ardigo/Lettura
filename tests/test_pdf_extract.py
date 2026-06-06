@@ -1,7 +1,12 @@
 """Unit tests for text cleanup — pure logic, no heavy dependencies."""
 import pytest
 
-from backend.pdf_extract import clean_text, normalize_for_speech, ocr_clean
+from backend.pdf_extract import (
+    clean_text,
+    fix_extraction_artifacts,
+    normalize_for_speech,
+    ocr_clean,
+)
 
 
 def test_dehyphenates_words_split_across_lines():
@@ -181,6 +186,69 @@ def test_normalize_ellipsis_idempotent():
 
 def test_normalize_does_not_eat_paragraph_break_after_ellipsis():
     assert normalize_for_speech("fine...\n\nNuovo") == "fine…\n\nNuovo"
+
+
+# --- normalize_for_speech: expanded lexicon + collision guards ---
+
+@pytest.mark.parametrize(
+    "bare, accented",
+    [("curiosita", "curiosità"), ("poverta", "povertà"),
+     ("opportunita", "opportunità"), ("responsabilita", "responsabilità"),
+     ("caffe", "caffè"), ("giu", "giù"), ("lassu", "lassù")],
+)
+def test_normalize_expanded_lexicon(bare, accented):
+    assert normalize_for_speech(bare) == accented
+
+
+@pytest.mark.parametrize(
+    # These bare forms ARE real verb conjugations/participles -> must be kept.
+    "verb_form",
+    ["gravita", "necessita", "unita", "felicita", "abilita", "capacita", "stabilita"],
+)
+def test_normalize_keeps_verb_homographs(verb_form):
+    assert normalize_for_speech(f"la {verb_form} qui") == f"la {verb_form} qui"
+
+
+# --- normalize_for_speech: numeric date months ---
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("il 12/03/2026", "il 12 marzo 2026"),
+        ("il 01/01/2020", "il primo gennaio 2020"),
+        ("il 7.11.1999", "il 7 novembre 1999"),
+        ("il 25-12-2024", "il 25 dicembre 2024"),
+    ],
+)
+def test_normalize_spells_date_months(raw, expected):
+    assert normalize_for_speech(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["3.14", "1/2 mela", "10/20/2020", "32/01/2020", "versione 2.0.1"],
+)
+def test_normalize_leaves_non_dates(raw):
+    # Fractions, version numbers, invalid month/day, US-order -> untouched.
+    assert normalize_for_speech(raw) == raw
+
+
+# --- fix_extraction_artifacts: mojibake, ligatures, invisibles ---
+
+def test_fix_artifacts_repairs_mojibake():
+    assert fix_extraction_artifacts("perchÃ© la cittÃ ").startswith("perché la città")
+
+
+def test_fix_artifacts_expands_ligatures():
+    assert fix_extraction_artifacts("ﬁnale e aﬄizione") == "finale e afflizione"
+
+
+def test_fix_artifacts_strips_invisible_chars():
+    assert fix_extraction_artifacts("pa­ro​la﻿") == "parola"
+
+
+def test_clean_text_repairs_then_normalises():
+    assert clean_text("ﬁne perche' il 12/03/2026") == "fine perché il 12 marzo 2026"
 
 
 # --- punctuation that Kokoro reads as prosody is preserved verbatim ---

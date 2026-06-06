@@ -9,6 +9,10 @@ python-multipart>=0.0.9   # multipart/form-data uploads
 pdfplumber>=0.11
 pypdf>=4.2
 
+# Repairs real-world extraction damage before speech: mojibake, ligatures,
+# stray control chars, mis-decoded quotes (Apache-2.0, pure-Python, offline).
+ftfy>=6.1
+
 # OCR for scanned PDFs (optional at runtime).
 # Needs system packages: tesseract-ocr, tesseract-ocr-ita, poppler-utils.
 pytesseract>=0.3.10
