@@ -74,6 +74,47 @@ _ACCENT_RE = re.compile(
 # real words/titles produce — never natural single-letter words (all vowels).
 _DESPACE_RE = re.compile(r"(?<!\S)([^\W\d_](?: [^\W\d_]){3,})(?!\S)")
 
+# --- Curated accent lexicon -------------------------------------------------
+# Bare (unaccented) forms -> correctly accented form, for words extracted without
+# their accent. DELIBERATELY narrow: only words whose accented form is the only
+# real word in running Italian prose. We exclude every verb form (parlo != parlò)
+# and every ambiguous monosyllable pair (e/è, si/sì, da/dà, ne/né, la/là, se/sé,
+# di/dì, li/lì, te/tè) — those need grammar/context and are too risky to fold.
+_ACCENT_LEXICON = {
+    # conjunctions/adverbs in -ché (acute)
+    "perche": "perché", "poiche": "poiché", "benche": "benché",
+    "affinche": "affinché", "finche": "finché", "giacche": "giacché",
+    "nonche": "nonché", "cosicche": "cosicché", "sicche": "sicché",
+    "purche": "purché", "anziche": "anziché", "fuorche": "fuorché",
+    "dacche": "dacché", "macche": "macché", "allorche": "allorché",
+    "dopodiche": "dopodiché",
+    # common adverbs
+    "piu": "più", "gia": "già", "cosi": "così", "percio": "perciò", "cio": "ciò",
+    # nouns ending in -tà / -tù (the bare forms are not Italian words)
+    "citta": "città", "universita": "università", "qualita": "qualità",
+    "liberta": "libertà", "verita": "verità", "realta": "realtà",
+    "societa": "società", "attivita": "attività", "possibilita": "possibilità",
+    "facolta": "facoltà", "velocita": "velocità", "difficolta": "difficoltà",
+    "identita": "identità", "autorita": "autorità", "comunita": "comunità",
+    "umanita": "umanità", "civilta": "civiltà", "novita": "novità",
+    "quantita": "quantità", "proprieta": "proprietà", "maesta": "maestà",
+    "virtu": "virtù", "gioventu": "gioventù", "servitu": "servitù",
+    "schiavitu": "schiavitù",
+    # unambiguous "puo" (not a word) -> può
+    "puo": "può",
+    # borderline: "pero" is also "pear tree", but in adult prose "però" dominates
+    # — included on explicit request; remove this line for a botany-safe corpus.
+    "pero": "però",
+}
+_LEXICON_RE = re.compile(
+    r"\b(" + "|".join(sorted(_ACCENT_LEXICON, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
+)
+# 3+ dots (optionally space-separated) -> a single "…" glued to the previous word
+# (Kokoro's dedicated suspension token); a trailing space/punctuation is kept.
+_ELLIPSIS_DOTS_RE = re.compile(r"(?:[ \t]*\.){3,}")
+_ELLIPSIS_TIDY_RE = re.compile(r"…(?:[ \t]*[.…])*")
+
 
 def _accent_repl(match: re.Match) -> str:
     """Turn a vowel+apostrophe truncation into the correct accented vowel."""
@@ -91,6 +132,17 @@ def _accent_repl(match: re.Match) -> str:
     return stem + accented
 
 
+def _lexicon_repl(match: re.Match) -> str:
+    """Map a bare word to its accented form, preserving the original case."""
+    word = match.group(0)
+    accented = _ACCENT_LEXICON[word.lower()]
+    if word.isupper():
+        return accented.upper()
+    if word[0].isupper():
+        return accented[0].upper() + accented[1:]
+    return accented
+
+
 def _despace_repl(match: re.Match) -> str:
     """Join a letter-spaced run, but only if it contains a consonant.
 
@@ -104,16 +156,25 @@ def _despace_repl(match: re.Match) -> str:
 
 
 def normalize_for_speech(text: str) -> str:
-    """Fold vowel+apostrophe accents and rejoin letter-spaced words.
+    """Make extracted text read correctly aloud.
 
-    Idempotent and accent-safe: it keys off Unicode letter categories, never an
-    ASCII allow-list, and leaves elision apostrophes (l'amico) untouched.
+    - fold vowel+apostrophe accents (perche' -> perché), keeping elisions (l'amico)
+    - rejoin letter-spaced words ("p a r o l a" -> "parola")
+    - restore accents on a curated set of unambiguous words (citta -> città)
+    - normalise ellipses ("...", ". . .") to a single "…" suspension pause
+
+    ``!``/``?`` and parentheses are left untouched: Kokoro already reads them as
+    distinct prosody tokens. Idempotent and accent-safe (it keys off Unicode
+    letter categories, never an ASCII allow-list).
     """
     if not text:
         return text
     text = unicodedata.normalize("NFC", text)
     text = _ACCENT_RE.sub(_accent_repl, text)
     text = _DESPACE_RE.sub(_despace_repl, text)
+    text = _LEXICON_RE.sub(_lexicon_repl, text)
+    text = _ELLIPSIS_DOTS_RE.sub("…", text)
+    text = _ELLIPSIS_TIDY_RE.sub("…", text)
     return text
 
 
