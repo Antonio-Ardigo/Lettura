@@ -126,6 +126,73 @@ def test_normalize_short_runs_are_left_alone():
     assert normalize_for_speech("a b c") == "a b c"
 
 
+# --- normalize_for_speech: curated missing-accent lexicon ---
+
+@pytest.mark.parametrize(
+    "bare, accented",
+    [
+        ("perche", "perché"),
+        ("piu", "più"),
+        ("gia", "già"),
+        ("cosi", "così"),
+        ("citta", "città"),
+        ("universita", "università"),
+        ("virtu", "virtù"),
+        ("puo", "può"),
+        ("pero", "però"),  # borderline entry, included on request
+        ("Perche", "Perché"),  # capitalised
+        ("PERCHE", "PERCHÉ"),  # upper-case
+    ],
+)
+def test_normalize_restores_missing_accents(bare, accented):
+    assert normalize_for_speech(bare) == accented
+    assert normalize_for_speech(f"e {bare} via") == f"e {accented} via"
+
+
+@pytest.mark.parametrize(
+    "word",
+    # Ambiguous monosyllables and verb forms must NEVER be touched.
+    ["e", "si", "da", "ne", "la", "se", "di", "li", "te",
+     "parlo", "meta", "unita", "pianeta", "perché", "città"],
+)
+def test_normalize_leaves_ambiguous_and_already_accented_words(word):
+    assert normalize_for_speech(f"la {word} qui") == f"la {word} qui"
+
+
+# --- normalize_for_speech: ellipsis -> single "…" suspension ---
+
+@pytest.mark.parametrize(
+    "raw",
+    ["Aspetta... arrivo", "Aspetta.... arrivo", "Aspetta . . . arrivo",
+     "Aspetta ... arrivo"],
+)
+def test_normalize_collapses_ellipsis_to_single_char(raw):
+    out = normalize_for_speech(raw)
+    assert "…" in out and "..." not in out
+    assert out.count("…") == 1
+    assert out.startswith("Aspetta…")  # glued to the preceding word
+    assert out.endswith("arrivo")
+
+
+def test_normalize_ellipsis_idempotent():
+    once = normalize_for_speech("Aspetta... arrivo")
+    assert normalize_for_speech(once) == once
+
+
+def test_normalize_does_not_eat_paragraph_break_after_ellipsis():
+    assert normalize_for_speech("fine...\n\nNuovo") == "fine…\n\nNuovo"
+
+
+# --- punctuation that Kokoro reads as prosody is preserved verbatim ---
+
+@pytest.mark.parametrize(
+    "text",
+    ["Che bello!", "Davvero?", "il cane (nero) corre", "uno; due: tre"],
+)
+def test_clean_text_preserves_prosody_punctuation(text):
+    assert clean_text(text) == text
+
+
 # --- clean_text composes the normalisation across paragraphs ---
 
 def test_clean_text_normalises_accents_and_spacing():
