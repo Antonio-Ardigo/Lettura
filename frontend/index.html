@@ -10,15 +10,17 @@
   <main class="app">
     <header>
       <h1>Lettura</h1>
-      <p class="tagline">Carica un PDF in italiano e ascoltalo letto ad alta voce.</p>
+      <p class="tagline">Carica un PDF, EPUB o HTML in italiano e ascoltalo letto ad alta voce.</p>
     </header>
 
     <p class="notice" id="modelNotice" hidden></p>
 
     <section class="card">
       <label for="file" class="filedrop" id="filedrop">
-        <input type="file" id="file" accept="application/pdf" hidden />
-        <span id="filelabel">Trascina qui un PDF o fai clic per sceglierlo</span>
+        <input type="file" id="file"
+               accept=".pdf,.epub,.html,.htm,.xhtml,application/pdf,application/epub+zip,text/html"
+               hidden />
+        <span id="filelabel">Trascina qui un PDF, EPUB o HTML o fai clic per sceglierlo</span>
       </label>
       <button id="extractBtn" disabled>Estrai testo</button>
     </section>
@@ -41,6 +43,8 @@
           <input type="range" id="speed" min="0.5" max="2" step="0.1" value="1" />
         </label>
         <button id="readAlongBtn">▶ Leggi con evidenziazione</button>
+        <button id="resetBtn" class="secondary" type="button"
+                aria-label="Ferma la lettura e ricomincia da capo">↺ Reimposta</button>
         <button id="speakBtn" class="secondary">Leggi tutto</button>
         <label>Formato
           <select id="format">

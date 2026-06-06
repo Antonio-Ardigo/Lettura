@@ -1,5 +1,7 @@
 """Unit tests for text cleanup — pure logic, no heavy dependencies."""
-from backend.pdf_extract import clean_text, ocr_clean
+import pytest
+
+from backend.pdf_extract import clean_text, normalize_for_speech, ocr_clean
 
 
 def test_dehyphenates_words_split_across_lines():
@@ -49,3 +51,83 @@ def test_ocr_clean_preserves_paragraph_breaks_for_segmentation():
 
 def test_ocr_clean_collapses_noise_runs():
     assert ocr_clean("buongiorno!!!!") == "buongiorno!"
+
+
+# --- normalize_for_speech: vowel+apostrophe accents (grave/acute) ---
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("e'", "è"),            # bare copula
+        ("perche'", "perché"),  # -ché -> acute
+        ("poiche'", "poiché"),
+        ("benche'", "benché"),
+        ("cioe'", "cioè"),      # -è grave
+        ("caffe'", "caffè"),
+        ("citta'", "città"),
+        ("piu'", "più"),
+        ("puo'", "può"),
+        ("cosi'", "così"),
+        ("li'", "lì"),
+        ("Giro'", "Girò"),      # capitalised stem keeps its case
+        ("ventitre'", "ventitré"),  # -tré numerals -> acute
+    ],
+)
+def test_normalize_folds_apostrophe_accents(raw, expected):
+    assert normalize_for_speech(raw) == expected
+
+
+@pytest.mark.parametrize(
+    "elision",
+    ["l'amico", "dell'arte", "un'altra", "quell'uomo", "c'è", "anch'io", "dov'è"],
+)
+def test_normalize_preserves_elision_apostrophes(elision):
+    assert normalize_for_speech(elision) == elision
+
+
+@pytest.mark.parametrize("troncamento", ["po'", "un po' di pane", "va'", "da'", "fa'"])
+def test_normalize_preserves_truncation_apostrophes(troncamento):
+    assert normalize_for_speech(troncamento) == troncamento
+
+
+def test_normalize_accent_before_punctuation():
+    assert normalize_for_speech("perche'.") == "perché."
+    assert normalize_for_speech("e', dunque") == "è, dunque"
+
+
+def test_normalize_curly_apostrophe_accent_and_elision():
+    assert normalize_for_speech("perche’") == "perché"
+    assert normalize_for_speech("l’amico") == "l’amico"
+
+
+def test_normalize_is_idempotent():
+    once = normalize_for_speech("perche' citta' e' p a r o l a")
+    assert normalize_for_speech(once) == once
+
+
+# --- normalize_for_speech: rejoin letter-spaced words ---
+
+def test_normalize_rejoins_letter_spaced_word():
+    assert normalize_for_speech("p a r o l a") == "parola"
+    assert normalize_for_speech("la p a r o l a giusta") == "la parola giusta"
+
+
+def test_normalize_rejoins_spaced_caps_title():
+    assert normalize_for_speech("C A P I T O L O") == "CAPITOLO"
+
+
+def test_normalize_keeps_vowel_only_runs():
+    # All-vowel runs are real single-letter words, never letter-spacing.
+    assert normalize_for_speech("a e i o") == "a e i o"
+
+
+def test_normalize_short_runs_are_left_alone():
+    # Below the 4-token threshold we never merge (protects "a b c").
+    assert normalize_for_speech("a b c") == "a b c"
+
+
+# --- clean_text composes the normalisation across paragraphs ---
+
+def test_clean_text_normalises_accents_and_spacing():
+    assert clean_text("perche'\n\ncitta'") == "perché\n\ncittà"
+    assert clean_text("la p a r o l a") == "la parola"

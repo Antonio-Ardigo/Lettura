@@ -49,6 +49,73 @@ _LIGATURES = {
 # every one-char symbol, so meaningful tokens like "%", "&", "°", "-" survive.
 _NOISE_SINGLE_CHARS = set("|~^`_\\¦•·◦¬")
 
+# --- Speech normalisation -------------------------------------------------
+# Many Italian PDFs encode a final accent as "vowel + apostrophe" (e.g.
+# "perche'", "citta'", "puo'") because the font lacks the accented glyph. Spoken
+# aloud the apostrophe trips up the TTS, so we fold these back to real accents —
+# WITHOUT touching elision apostrophes (l'amico, dell'arte, un'altra), which are
+# letter+apostrophe+letter, never vowel+apostrophe+boundary.
+_APOSTROPHES = "'’ʼ´`"
+# Truncations ("troncamenti") that legitimately keep the apostrophe and must NOT
+# become accented vowels: po' (poco), va'/da'/fa'/sta'/di' (imperatives), be'…
+_TRONCAMENTI = {"po", "mo", "be", "va", "da", "fa", "sta", "di", "to"}
+# Final "-e" truncations that take an acute (closed) é rather than a grave è.
+_ACUTE_E_WORDS = {"ne", "se", "merce", "vicere", "teste", "scimpanze"}
+_GRAVE_VOWEL = {"a": "à", "e": "è", "i": "ì", "o": "ò", "u": "ù"}
+_VOWELS_ACCENTED = "aeiouàèéìòù"
+
+# A word's final vowel, an apostrophe, then a boundary (space / punctuation / end
+# of string) — i.e. an accent, not an elision.
+_ACCENT_RE = re.compile(
+    r"([^\W\d_]*)([aeiouAEIOU])[" + _APOSTROPHES + r"]"
+    r"(?=[\s.,;:!?\"»”)\]…]|$)"
+)
+# A standalone run of 4+ single letters spaced apart ("p a r o l a"), which only
+# real words/titles produce — never natural single-letter words (all vowels).
+_DESPACE_RE = re.compile(r"(?<!\S)([^\W\d_](?: [^\W\d_]){3,})(?!\S)")
+
+
+def _accent_repl(match: re.Match) -> str:
+    """Turn a vowel+apostrophe truncation into the correct accented vowel."""
+    stem, vowel = match.group(1), match.group(2)
+    word = (stem + vowel).lower()
+    if word in _TRONCAMENTI:
+        return match.group(0)  # genuine truncation; keep the apostrophe
+    if vowel in "eE":
+        acute = word.endswith("che") or word.endswith("tre") or word in _ACUTE_E_WORDS
+        accented = "é" if acute else "è"
+    else:
+        accented = _GRAVE_VOWEL[vowel.lower()]
+    if vowel.isupper():
+        accented = accented.upper()
+    return stem + accented
+
+
+def _despace_repl(match: re.Match) -> str:
+    """Join a letter-spaced run, but only if it contains a consonant.
+
+    Vowel-only runs (e.g. "a e i o") are left alone so legitimate single-letter
+    words are never merged; letter-spaced words/titles always carry a consonant.
+    """
+    joined = match.group(0).replace(" ", "")
+    if any(ch.lower() not in _VOWELS_ACCENTED for ch in joined):
+        return joined
+    return match.group(0)
+
+
+def normalize_for_speech(text: str) -> str:
+    """Fold vowel+apostrophe accents and rejoin letter-spaced words.
+
+    Idempotent and accent-safe: it keys off Unicode letter categories, never an
+    ASCII allow-list, and leaves elision apostrophes (l'amico) untouched.
+    """
+    if not text:
+        return text
+    text = unicodedata.normalize("NFC", text)
+    text = _ACCENT_RE.sub(_accent_repl, text)
+    text = _DESPACE_RE.sub(_despace_repl, text)
+    return text
+
 
 @dataclass
 class ExtractionResult:
@@ -104,6 +171,7 @@ def clean_text(raw: str) -> str:
     - keep blank lines as paragraph separators
     - collapse single newlines inside a paragraph into spaces
     - normalise repeated whitespace
+    - fold vowel+apostrophe accents and rejoin letter-spaced words for speech
     """
     # De-hyphenate words broken across lines.
     text = re.sub(r"(\w)-\n(\w)", r"\1\2", raw)
@@ -115,6 +183,9 @@ def clean_text(raw: str) -> str:
     text = re.sub(r"[ \t]{2,}", " ", text)
     # Restore paragraph breaks.
     text = text.replace(_PARAGRAPH, "\n\n")
+    # Fold vowel+apostrophe accents and rejoin letter-spaced words so the text
+    # reads correctly when spoken aloud.
+    text = normalize_for_speech(text)
     return text.strip()
 
 
