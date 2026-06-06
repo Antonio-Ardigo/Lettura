@@ -15,6 +15,7 @@ const voiceSelect = $("voice");
 const speed = $("speed");
 const speedVal = $("speedval");
 const readAlongBtn = $("readAlongBtn");
+const resetBtn = $("resetBtn");
 const speakBtn = $("speakBtn");
 const formatSel = $("format");
 const downloadBtn = $("downloadBtn");
@@ -41,11 +42,18 @@ let mode = "text"; // "text" | "doc"
 let activeSentences = []; // strings the read-along will speak
 let activeHighlight = () => {}; // sentence-level highlight for the current mode
 
-let playing = false;
+let playing = false; // UI state only; loop control is gated on playToken
 let currentIndex = 0;
 let currentAudioUrl = null;
 let endedResolver = null;
 let rafId = null;
+
+// Read-along engine: a monotonically increasing token identifies the live loop
+// (so a stale loop can never clobber a newer one — the click-to-read race fix),
+// plus a small prefetch cache that synthesizes the next segment ahead of time.
+let playToken = 0;
+const prefetch = new Map(); // startSentenceIndex -> Promise<{url, words, seg}>
+const SEGMENT_WORDS = 12; // group short sentences up to ~N words per audio clip
 
 function setStatus(message, isError = false) {
   statusEl.textContent = message || "";
@@ -257,10 +265,9 @@ function renderReader() {
       }
     });
     span.appendChild(document.createTextNode(" "));
-    span.addEventListener("click", () => {
-      if (playing) stopReadAlong();
-      startReadAlong(i);
-    });
+    // Start reading from this sentence. startReadAlong bumps the play-token, so
+    // any loop already running is superseded cleanly — no race, no stuck audio.
+    span.addEventListener("click", () => startReadAlong(i));
     reader.appendChild(span);
   });
 }
@@ -492,23 +499,23 @@ async function fetchClip(text, aligned) {
   return { url: wavUrlFromBase64(data.audio_base64), words: data.words };
 }
 
-function playUrl(url) {
+function playSegment(url, myToken) {
   return new Promise((resolve) => {
     endedResolver = resolve;
     player.src = url;
     player.hidden = false;
     player.onended = () => resolve("ended");
-    player.play();
+    // A superseded loop (token changed) is torn down by stopReadAlong(), which
+    // pauses the player and resolves this promise with "stopped".
+    player.play().catch(() => resolve("ended"));
+    if (myToken !== playToken) resolve("stopped");
   });
 }
 
 // --- Word-level highlight, driven by the audio clock ---
-function startWordTracker(sentenceIndex, words) {
-  const sentenceEl = reader.querySelector(
-    `.sentence[data-index="${sentenceIndex}"]`
-  );
-  if (!sentenceEl) return;
-  const wordEls = sentenceEl.querySelectorAll(".word");
+// Works across a *segment* (one or more grouped sentences): the word elements
+// are collected in reading order and aligned 1:1 with the per-word timings.
+function startWordTracker(wordEls, words) {
   let last = -1;
   const tick = () => {
     const t = player.currentTime;
@@ -537,69 +544,173 @@ function stopWordTracker() {
     .forEach((el) => el.classList.remove("wordactive"));
 }
 
-// --- Read-along (sentence highlight + word-level highlight in the text view) ---
+// --- Segmentation: group consecutive readable sentences up to ~N words so the
+// narration flows naturally and starts as soon as one segment is ready. ---
+function wordCount(s) {
+  return s.split(/\s+/).filter(Boolean).length;
+}
+
+// Describe what to do starting at sentence `start`:
+//   {kind:"seg", indices, text, next} — a playable segment
+//   {kind:"ocr", page}                — a scanned page to OCR first
+//   {kind:"skip", next}               — an unreadable sentence to skip
+//   null                              — nothing left
+function segmentAt(start) {
+  const n = activeSentences.length;
+  if (start >= n) return null;
+  if (mode === "text") {
+    const m = sentenceMeta[start] || {};
+    if (m.failed) return { kind: "skip", next: start + 1 };
+    if (m.placeholder) return { kind: "ocr", page: m.page };
+  }
+  const indices = [start];
+  let words = wordCount(activeSentences[start]);
+  let j = start + 1;
+  if (mode === "text") {
+    // Group only in the text view; the doc view highlights one sentence's boxes
+    // at a time, so it stays one-sentence-per-segment.
+    while (j < n && words < SEGMENT_WORDS) {
+      const m = sentenceMeta[j] || {};
+      if (m.placeholder || m.failed) break;
+      indices.push(j);
+      words += wordCount(activeSentences[j]);
+      j += 1;
+    }
+  }
+  return {
+    kind: "seg",
+    indices,
+    text: indices.map((k) => activeSentences[k]).join(" "),
+    next: j,
+  };
+}
+
+// --- Prefetch pipeline: synthesize the next segment while the current plays ---
+function ensureClip(startIndex) {
+  if (prefetch.has(startIndex)) return prefetch.get(startIndex);
+  const seg = segmentAt(startIndex);
+  if (!seg || seg.kind !== "seg") return null;
+  const p = fetchClip(seg.text, mode === "text").then((clip) => ({
+    ...clip,
+    seg,
+  }));
+  prefetch.set(startIndex, p);
+  return p;
+}
+
+function clearPrefetch() {
+  for (const p of prefetch.values()) {
+    Promise.resolve(p)
+      .then((clip) => {
+        if (clip && clip.url) URL.revokeObjectURL(clip.url);
+      })
+      .catch(() => {});
+  }
+  prefetch.clear();
+}
+
+// Highlight every sentence in a segment and wire the word tracker across them.
+function highlightSegment(seg, words) {
+  if (mode !== "text") {
+    activeHighlight(seg.indices[0]); // doc view: bounding-box highlight
+    return;
+  }
+  reader
+    .querySelectorAll(".sentence.active")
+    .forEach((el) => el.classList.remove("active"));
+  const wordEls = [];
+  seg.indices.forEach((idx, k) => {
+    const el = reader.querySelector(`.sentence[data-index="${idx}"]`);
+    if (!el) return;
+    el.classList.add("active");
+    if (k === 0) el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.querySelectorAll(".word").forEach((w) => wordEls.push(w));
+  });
+  if (words && words.length) startWordTracker(wordEls, words);
+}
+
+// --- Read-along: token-gated loop with prefetch + a preparation indicator ---
 async function startReadAlong(from) {
-  if (playing || activeSentences.length === 0) return;
-  if (from == null || from < 0 || from >= activeSentences.length) {
+  const myToken = ++playToken; // supersede any loop already running
+  stopWordTracker();
+  try {
+    player.pause();
+  } catch {
+    /* ignore */
+  }
+  clearPrefetch();
+  let i = firstReadableFrom(from == null ? 0 : from);
+  if (i < 0 || i >= activeSentences.length) {
     setReadAlongUI(false);
     return;
   }
-  playing = true;
   setReadAlongUI(true);
-  setStatus("Generazione dell'audio…");
-  let i = from;
-  for (; playing && i < activeSentences.length; i++) {
-    // In the text view, OCR a scanned page just-in-time as we reach it.
-    if (mode === "text") {
-      const m = sentenceMeta[i];
-      if (m && m.failed) continue; // unreadable page -> skip
-      if (m && m.placeholder) {
-        setStatus(`Riconoscimento del testo (OCR) — pagina ${m.page}…`);
-        showProgress(`Riconoscimento del testo (OCR) — pagina ${m.page}…`, true);
-        await ensurePageOcr(m.page);
-        hideProgress();
-        setStatus("");
-        if (!playing) break;
-        // Indices shifted after splicing; resume at this page's first sentence.
-        const resume = firstIndexForPage(m.page);
-        playing = false;
-        setReadAlongUI(false);
-        return startReadAlong(resume >= 0 ? resume : firstReadableFrom(i + 1));
-      }
+
+  while (myToken === playToken && i < activeSentences.length) {
+    const seg = segmentAt(i);
+    if (!seg) break;
+    if (seg.kind === "skip") {
+      i = seg.next;
+      continue;
     }
-    currentIndex = i;
-    activeHighlight(i);
+    if (seg.kind === "ocr") {
+      setStatus(`Riconoscimento del testo (OCR) — pagina ${seg.page}…`);
+      showProgress(`Riconoscimento del testo (OCR) — pagina ${seg.page}…`, true);
+      await ensurePageOcr(seg.page); // rebuilds the document (indices shift)
+      if (myToken !== playToken) return;
+      hideProgress();
+      setStatus("");
+      clearPrefetch();
+      const resume = firstIndexForPage(seg.page);
+      i = resume >= 0 ? resume : firstReadableFrom(i + 1);
+      if (i < 0) break;
+      continue;
+    }
+
+    // Show the prep indicator only if synthesis isn't ready almost instantly
+    // (so a prefetched segment plays gap-free, with no flicker).
+    const prepTimer = setTimeout(
+      () => showProgress("Preparazione dell'audio…", true),
+      120
+    );
     let clip;
     try {
-      clip = await fetchClip(activeSentences[i], mode === "text");
+      clip = await ensureClip(i);
     } catch (err) {
-      setStatus(err.message, true);
+      clearTimeout(prepTimer);
+      if (myToken === playToken) setStatus(err.message, true);
       break;
     }
-    if (!playing) {
-      URL.revokeObjectURL(clip.url);
-      break;
+    clearTimeout(prepTimer);
+    if (myToken !== playToken) {
+      if (clip) URL.revokeObjectURL(clip.url);
+      return;
     }
+    hideProgress();
     setStatus("");
+    prefetch.delete(i); // consumed; ownership moves to currentAudioUrl
+
+    // Kick off synthesis of the NEXT segment while this one plays.
+    if (seg.next < activeSentences.length) ensureClip(seg.next);
+
+    currentIndex = i;
     if (currentAudioUrl) URL.revokeObjectURL(currentAudioUrl);
     currentAudioUrl = clip.url;
-    if (mode === "text" && clip.words && clip.words.length) {
-      startWordTracker(i, clip.words);
-    }
-    await playUrl(clip.url);
+    highlightSegment(seg, clip.words);
+    const outcome = await playSegment(clip.url, myToken);
     stopWordTracker();
+    if (myToken !== playToken || outcome === "stopped") return;
+    i = seg.next;
   }
-  if (i >= activeSentences.length) currentIndex = 0;
-  stopReadAlong();
+  if (myToken !== playToken) return;
+  currentIndex = 0;
+  hideProgress();
+  setReadAlongUI(false);
 }
 
 function stopReadAlong() {
+  playToken += 1; // invalidate any in-flight loop (race-proof supersede)
   stopWordTracker();
-  if (!playing) {
-    setReadAlongUI(false);
-    return;
-  }
-  playing = false;
   try {
     player.pause();
   } catch {
@@ -609,10 +720,40 @@ function stopReadAlong() {
     endedResolver("stopped");
     endedResolver = null;
   }
+  clearPrefetch();
   setReadAlongUI(false);
 }
 
+// Stop everything and rewind to the top, keeping the document loaded.
+function resetReadAlong() {
+  stopReadAlong();
+  currentIndex = 0;
+  reader
+    .querySelectorAll(".sentence.active")
+    .forEach((el) => el.classList.remove("active"));
+  reader
+    .querySelectorAll(".word.wordactive")
+    .forEach((el) => el.classList.remove("wordactive"));
+  docview.querySelectorAll(".hl").forEach((el) => el.remove());
+  if (currentAudioUrl) {
+    URL.revokeObjectURL(currentAudioUrl);
+    currentAudioUrl = null;
+  }
+  try {
+    player.pause();
+  } catch {
+    /* ignore */
+  }
+  player.removeAttribute("src");
+  player.hidden = true;
+  reader.scrollTop = 0;
+  docview.scrollTop = 0;
+  hideProgress();
+  setStatus("");
+}
+
 function setReadAlongUI(on) {
+  playing = on;
   readAlongBtn.textContent = on ? "⏹ Ferma" : "▶ Leggi con evidenziazione";
   readAlongBtn.classList.toggle("playing", on);
 }
@@ -621,6 +762,8 @@ readAlongBtn.addEventListener("click", () => {
   if (playing) stopReadAlong();
   else startReadAlong(currentIndex);
 });
+
+resetBtn.addEventListener("click", resetReadAlong);
 
 // --- Read everything in one shot ---
 speakBtn.addEventListener("click", async () => {
