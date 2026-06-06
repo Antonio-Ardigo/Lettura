@@ -35,7 +35,17 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import __version__, align, export, layout, pdf_extract, segment, store, tts
+from . import (
+    __version__,
+    align,
+    documents,
+    export,
+    layout,
+    pdf_extract,
+    segment,
+    store,
+    tts,
+)
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB
@@ -78,7 +88,7 @@ class OcrPageRequest(BaseModel):
 
 
 async def _read_pdf_upload(file: UploadFile) -> bytes:
-    """Validate a PDF upload and return its bytes (shared by extract/layout)."""
+    """Validate a PDF upload and return its bytes (used by /api/layout)."""
     if (file.content_type or "").lower() not in {"application/pdf", "application/x-pdf"}:
         raise HTTPException(status_code=415, detail="Please upload a PDF file.")
     data = await file.read()
@@ -86,6 +96,20 @@ async def _read_pdf_upload(file: UploadFile) -> bytes:
         raise HTTPException(status_code=400, detail="The uploaded PDF is empty.")
     if len(data) > MAX_PDF_BYTES:
         raise HTTPException(status_code=413, detail="PDF exceeds the 50 MB limit.")
+    return data
+
+
+async def _read_document_upload(file: UploadFile) -> bytes:
+    """Validate a PDF / EPUB / HTML upload and return its bytes."""
+    if not documents.is_supported(file.filename or "", file.content_type or ""):
+        raise HTTPException(
+            status_code=415, detail="Please upload a PDF, EPUB or HTML file."
+        )
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+    if len(data) > MAX_PDF_BYTES:
+        raise HTTPException(status_code=413, detail="File exceeds the 50 MB limit.")
     return data
 
 
@@ -108,16 +132,22 @@ def voices() -> dict:
 
 @app.post("/api/extract")
 async def extract(file: UploadFile = File(...)) -> dict:
-    """Fast extraction: text-layer pages now, scanned pages OCR'd later.
+    """Fast extraction for PDF / EPUB / HTML.
 
-    Returns a ``doc_id`` the browser uses to OCR scanned pages one at a time
-    (see /api/ocr_page) and to drive read-along without re-uploading the PDF.
+    For PDFs, text-layer pages return now and scanned pages are OCR'd later
+    (see /api/ocr_page). EPUB and HTML are plain text — all pages are ``ready``.
+    Returns a ``doc_id`` so the browser can drive read-along (and lazy OCR for
+    PDFs) without re-uploading the file.
     """
-    data = await _read_pdf_upload(file)
+    data = await _read_document_upload(file)
     try:
-        quick = pdf_extract.extract_quick(data)
+        quick = documents.extract_document(
+            data, file.filename or "", file.content_type or ""
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=415, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=422, detail=f"Could not read PDF: {exc}") from exc
+        raise HTTPException(status_code=422, detail=f"Could not read file: {exc}") from exc
     doc_id = _DOC_STORE.put(data)
     text = quick.text
     return {

@@ -129,10 +129,22 @@ fileInput.addEventListener("change", () => selectFile(fileInput.files[0]));
 );
 fileDrop.addEventListener("drop", (e) => selectFile(e.dataTransfer.files[0]));
 
+const SUPPORTED_RE = /\.(pdf|epub|html?|xhtml)$/i;
+const PDF_RE = /\.pdf$/i;
+
+function isSupportedFile(file) {
+  return SUPPORTED_RE.test(file.name) || file.type === "application/pdf" ||
+    file.type === "application/epub+zip" || file.type === "text/html";
+}
+
+function isPdfFile(file) {
+  return PDF_RE.test(file.name) || file.type === "application/pdf";
+}
+
 function selectFile(file) {
   if (!file) return;
-  if (file.type !== "application/pdf") {
-    setStatus("Seleziona un file PDF.", true);
+  if (!isSupportedFile(file)) {
+    setStatus("Seleziona un file PDF, EPUB o HTML.", true);
     return;
   }
   selectedFile = file;
@@ -166,6 +178,11 @@ extractBtn.addEventListener("click", async () => {
     layoutSentences = [];
     docview.innerHTML = "";
     currentIndex = 0;
+    // The "Documento" view renders the original PDF; it's unavailable for
+    // EPUB/HTML, which have no page layout to show.
+    const pdf = isPdfFile(selectedFile);
+    docViewBtn.disabled = !pdf;
+    docViewBtn.title = pdf ? "" : "Disponibile solo per i PDF";
     rebuildDocument();
     setMode("text", { force: true });
     const realCount = pages.reduce((n, p) => n + p.sentences.length, 0);

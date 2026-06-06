@@ -10,15 +10,17 @@
   <main class="app">
     <header>
       <h1>Lettura</h1>
-      <p class="tagline">Carica un PDF in italiano e ascoltalo letto ad alta voce.</p>
+      <p class="tagline">Carica un PDF, EPUB o HTML in italiano e ascoltalo letto ad alta voce.</p>
     </header>
 
     <p class="notice" id="modelNotice" hidden></p>
 
     <section class="card">
       <label for="file" class="filedrop" id="filedrop">
-        <input type="file" id="file" accept="application/pdf" hidden />
-        <span id="filelabel">Trascina qui un PDF o fai clic per sceglierlo</span>
+        <input type="file" id="file"
+               accept=".pdf,.epub,.html,.htm,.xhtml,application/pdf,application/epub+zip,text/html"
+               hidden />
+        <span id="filelabel">Trascina qui un PDF, EPUB o HTML o fai clic per sceglierlo</span>
       </label>
       <button id="extractBtn" disabled>Estrai testo</button>
     </section>

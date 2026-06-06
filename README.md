@@ -1,13 +1,18 @@
 # Lettura
 
-Read Italian PDFs aloud with a single, natural narrator — fully **offline** and
-built only from **permissively licensed** (commercial-safe) open-source tools.
+Read Italian **PDF, EPUB and HTML** documents aloud with a single, natural
+narrator — fully **offline** and built only from **permissively licensed**
+(commercial-safe) open-source tools.
 
-Upload a PDF → Lettura extracts the Italian text (with OCR fallback for scanned
-documents) → an offline neural voice reads it back to you in the browser, with
-the current sentence highlighted **either in a text view or on the rendered
-original PDF**. You can also **export a whole document to one audio file**
-(WAV / MP3 / M4B with chapters).
+Upload a PDF, EPUB or HTML file → Lettura extracts the Italian text (with OCR
+fallback for scanned PDFs) → an offline neural voice reads it back to you in the
+browser, with the current sentence highlighted **either in a text view or on the
+rendered original PDF**. You can also **export a whole document to one audio
+file** (WAV / MP3 / M4B with chapters).
+
+EPUB and HTML are parsed with the Python standard library only (no extra
+dependencies); the read-along view and audio export work the same for every
+format. The rendered-document view is PDF-only.
 
 ## Why these tools
 
@@ -49,7 +54,8 @@ and the raw OCR output is sanitised (`ocr_clean`) before it is ever spoken or
 exported. The TTS model is **warmed up in the background at startup** so the
 first synthesis isn't blocked on the ~90 MB download.
 
-- `backend/pdf_extract.py` — fast extract (`extract_quick`), on-demand OCR (`ocr_page_text`), OCR sanitisation (`ocr_clean`) + cleanup
+- `backend/documents.py` — type dispatch for PDF/EPUB/HTML; stdlib EPUB + HTML text extraction
+- `backend/pdf_extract.py` — fast extract (`extract_quick`), on-demand OCR (`ocr_page_text`), OCR sanitisation (`ocr_clean`), speech normalisation (`normalize_for_speech`)
 - `backend/store.py` — small in-memory TTL caches: uploaded PDFs (`doc_id`) and export jobs (`job_id`)
 - `backend/segment.py` — Italian sentence segmentation
 - `backend/layout.py` — per-sentence bounding boxes on the page (`/api/layout`)
@@ -86,7 +92,8 @@ pip install -r requirements.txt
 uvicorn backend.main:app --reload
 ```
 
-Open http://127.0.0.1:8000 — upload a PDF (try `samples/esempio.pdf`) and
+Open http://127.0.0.1:8000 — upload a PDF, EPUB or HTML file (try
+`samples/esempio.pdf`) and
 **Estrai testo**. Then:
 
 - **Leggi con evidenziazione** — read-along, highlighting each sentence. Switch
@@ -132,7 +139,7 @@ pytest -q                      # unit tests
 |---|---|---|
 | `GET` | `/api/health` | Liveness + whether OCR is available + TTS model readiness |
 | `GET` | `/api/voices` | Available Italian voices |
-| `POST` | `/api/extract` | `multipart` PDF → fast text-layer extract + `doc_id` + pages needing OCR |
+| `POST` | `/api/extract` | `multipart` PDF/EPUB/HTML → fast extract + `doc_id` + pages needing OCR (PDF only) |
 | `POST` | `/api/ocr_page` | JSON `{doc_id, page}` → OCR one page on demand (cleaned) |
 | `POST` | `/api/layout` | `multipart` PDF → per-sentence bounding boxes |
 | `POST` | `/api/speak` | JSON `{text, voice, speed}` → WAV audio |
